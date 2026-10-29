@@ -9,6 +9,7 @@ import coil3.request.crossfade
 import dev.anilbeesetti.nextplayer.core.common.di.DispatchersModule
 import dev.anilbeesetti.nextplayer.core.data.DataModule
 import dev.anilbeesetti.nextplayer.core.data.repository.PreferencesRepository
+import dev.anilbeesetti.nextplayer.core.media.network.NetworkVideoThumbnailFetcher
 import dev.anilbeesetti.nextplayer.core.model.ThumbnailGenerationStrategy
 import dev.anilbeesetti.nextplayer.feature.network.NetworkModule
 import dev.anilbeesetti.nextplayer.feature.player.PlayerModule
@@ -41,8 +42,10 @@ class AppModule {
     fun provideImageLoader(
         context: Context,
         preferencesRepository: PreferencesRepository,
+        networkVideoThumbnailFetcher: NetworkVideoThumbnailFetcher,
     ): ImageLoader = ImageLoader.Builder(context = context)
         .components {
+            add(networkVideoThumbnailFetcher)
             add(
                 VideoThumbnailDecoder.Factory(
                     thumbnailStrategy = {

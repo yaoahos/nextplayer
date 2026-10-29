@@ -1,5 +1,6 @@
 package dev.anilbeesetti.nextplayer.feature.network.screens.browse
 
+import android.net.Uri
 import android.text.format.DateFormat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -46,6 +47,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -56,6 +58,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.min
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import coil3.compose.AsyncImage
 import dev.anilbeesetti.nextplayer.core.common.Utils
 import dev.anilbeesetti.nextplayer.core.common.extensions.isTelevision
 import dev.anilbeesetti.nextplayer.core.model.MediaLayoutMode
@@ -302,6 +305,7 @@ internal fun NetworkBrowseScreenContent(
                                         val history = state.playbackHistory[file.path]
                                         NetworkFileItem(
                                             file = file,
+                                            fileUri = state.fileUris[file.path],
                                             isGrid = isGrid,
                                             isFirstItem = index == 0,
                                             isLastItem = index == files.lastIndex,
@@ -363,6 +367,7 @@ internal fun NetworkBrowseScreenContent(
 @Composable
 private fun NetworkFileItem(
     file: NetworkFile,
+    fileUri: Uri?,
     isGrid: Boolean,
     isFirstItem: Boolean,
     isLastItem: Boolean,
@@ -394,6 +399,7 @@ private fun NetworkFileItem(
             {
                 NetworkFileThumbnail(
                     file = file,
+                    fileUri = fileUri,
                     playedPercentage = playedPercentage,
                     isGrid = false,
                 )
@@ -408,6 +414,7 @@ private fun NetworkFileItem(
                 ) {
                     NetworkFileThumbnail(
                         file = file,
+                        fileUri = fileUri,
                         playedPercentage = playedPercentage,
                         isGrid = true,
                     )
@@ -449,7 +456,12 @@ private fun NetworkFileItem(
 }
 
 @Composable
-private fun NetworkFileThumbnail(file: NetworkFile, playedPercentage: Float?, isGrid: Boolean) {
+private fun NetworkFileThumbnail(
+    file: NetworkFile,
+    fileUri: Uri?,
+    playedPercentage: Float?,
+    isGrid: Boolean,
+) {
     if (file.isDirectory) {
         Box(
             modifier = if (isGrid) Modifier else Modifier.padding(horizontal = 8.dp),
@@ -488,6 +500,16 @@ private fun NetworkFileThumbnail(file: NetworkFile, playedPercentage: Float?, is
                 tint = MaterialTheme.colorScheme.surfaceColorAtElevation(100.dp),
                 modifier = Modifier.fillMaxSize(fraction = 0.5f),
             )
+            // The frame is drawn over the icon, which stays as the placeholder while it loads and
+            // as the fallback when the server refuses or the file cannot be decoded.
+            if (fileUri != null) {
+                AsyncImage(
+                    model = fileUri,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
             if (playedPercentage != null) {
                 if (isGrid) {
                     Box(

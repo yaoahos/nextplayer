@@ -57,6 +57,9 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtimeCompose)
     implementation(libs.accompanist.permissions)
 
+    // Image loading for network thumbnails
+    implementation(libs.coil.compose)
+
     // Koin
     implementation(libs.koin.core)
     implementation(libs.koin.annotations)

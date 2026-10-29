@@ -32,6 +32,7 @@ import org.koin.core.annotation.KoinViewModel
 data class NetworkBrowseUiState(
     val title: String = "",
     val files: List<NetworkFile> = emptyList(),
+    val fileUris: Map<String, Uri> = emptyMap(),
     val playbackHistory: Map<String, Video> = emptyMap(),
     val recentlyPlayedPath: String? = null,
     val preferences: ApplicationPreferences = ApplicationPreferences(),
@@ -211,6 +212,16 @@ class NetworkBrowseViewModel(
                                     it.preferences.networkSortOrder,
                                 ).networkFileComparator(),
                             ),
+                            // Covers are loaded straight from the connection, so keep the playback
+                            // URI the thumbnail fetcher needs next to each video.
+                            fileUris = visible
+                                .filterNot { file -> file.isDirectory }
+                                .associate { file ->
+                                    file.path to NetworkUri.build(
+                                        connection = conn,
+                                        filePath = file.path,
+                                    )
+                                },
                             isLoading = false,
                         )
                     }
