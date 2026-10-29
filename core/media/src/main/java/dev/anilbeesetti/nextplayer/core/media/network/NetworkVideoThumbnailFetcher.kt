@@ -8,12 +8,14 @@ import android.net.Uri
 import android.os.Build
 import androidx.core.graphics.drawable.toDrawable
 import coil3.ImageLoader
+import coil3.Uri as CoilUri
 import coil3.asImage
 import coil3.decode.DataSource
 import coil3.fetch.FetchResult
 import coil3.fetch.Fetcher
 import coil3.fetch.ImageFetchResult
 import coil3.request.Options
+import coil3.toAndroidUri
 import java.io.Closeable
 import java.io.File
 import java.io.FileOutputStream
@@ -44,17 +46,19 @@ import org.koin.core.annotation.Single
 class NetworkVideoThumbnailFetcher(
     private val connectionResolver: NetworkConnectionResolver,
     private val clientFactory: NetworkClientFactory,
-) : Fetcher.Factory<Uri> {
+) : Fetcher.Factory<CoilUri> {
 
-    override fun create(data: Uri, options: Options, imageLoader: ImageLoader): Fetcher? =
-        if (NetworkUri.isNetworkUri(uri = data)) {
+    override fun create(data: CoilUri, options: Options, imageLoader: ImageLoader): Fetcher? {
+        val uri = data.toAndroidUri()
+        return if (NetworkUri.isNetworkUri(uri = uri)) {
             ThumbnailFetcher(
-                uri = data,
+                uri = uri,
                 options = options,
             )
         } else {
             null
         }
+    }
 
     private inner class ThumbnailFetcher(private val uri: Uri, private val options: Options) :
         Fetcher {
