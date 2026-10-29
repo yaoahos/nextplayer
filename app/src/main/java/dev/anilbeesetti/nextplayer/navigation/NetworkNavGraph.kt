@@ -9,15 +9,12 @@ import dev.anilbeesetti.nextplayer.feature.network.navigation.navigateToAddConne
 import dev.anilbeesetti.nextplayer.feature.network.navigation.navigateToNetworkBrowse
 import dev.anilbeesetti.nextplayer.feature.network.navigation.networkBrowseEntry
 import dev.anilbeesetti.nextplayer.feature.network.navigation.networkEntry
-import dev.anilbeesetti.nextplayer.settings.navigation.navigateToSettings
 
 fun EntryProviderScope<NavKey>.networkNavGraph(context: Context, backStack: NavBackStack<NavKey>) {
     networkEntry(
         onAddConnection = { backStack.navigateToAddConnection() },
         onEditConnection = { id -> backStack.navigateToAddConnection(connectionId = id) },
         onOpenConnection = { id -> backStack.navigateToNetworkBrowse(connectionId = id) },
-        onSettingsClick = backStack::navigateToSettings,
-        onOpenStream = { uri -> context.startPlayback(uri = uri) },
     )
 
     addConnectionEntry(

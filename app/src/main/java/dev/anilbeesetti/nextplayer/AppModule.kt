@@ -12,7 +12,6 @@ import dev.anilbeesetti.nextplayer.core.data.repository.PreferencesRepository
 import dev.anilbeesetti.nextplayer.core.model.ThumbnailGenerationStrategy
 import dev.anilbeesetti.nextplayer.feature.network.NetworkModule
 import dev.anilbeesetti.nextplayer.feature.player.PlayerModule
-import dev.anilbeesetti.nextplayer.feature.playlist.PlaylistModule
 import dev.anilbeesetti.nextplayer.feature.videopicker.VideoPickerModule
 import dev.anilbeesetti.nextplayer.settings.SettingsModule
 import okio.FileSystem
@@ -26,7 +25,6 @@ import org.koin.core.annotation.Single
         DispatchersModule::class,
         DataModule::class,
         NetworkModule::class,
-        PlaylistModule::class,
         PlayerModule::class,
         SettingsModule::class,
         VideoPickerModule::class,

@@ -3,7 +3,8 @@ package dev.anilbeesetti.nextplayer.navigation
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.navigation3.runtime.NavBackStack
 import androidx.navigation3.runtime.NavKey
-import dev.anilbeesetti.nextplayer.feature.playlist.navigation.PlaylistDetailRoute
+import dev.anilbeesetti.nextplayer.settings.navigation.AppearancePreferencesRoute
+import dev.anilbeesetti.nextplayer.settings.navigation.SettingsRoute
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -14,8 +15,8 @@ class TopLevelNavigationTest {
         assertEquals(
             listOf(
                 TopLevelDestination.MEDIA,
-                TopLevelDestination.PLAYLISTS,
                 TopLevelDestination.NETWORK,
+                TopLevelDestination.SETTINGS,
                 TopLevelDestination.MORE,
             ),
             TopLevelDestination.entries,
@@ -23,7 +24,7 @@ class TopLevelNavigationTest {
     }
 
     @Test
-    fun switchingTabsPreservesPlaylistDetailStack() {
+    fun switchingTabsPreservesSettingsDetailStack() {
         val stacks = TopLevelDestination.entries.associate { destination ->
             destination.route to NavBackStack<NavKey>(destination.route)
         }
@@ -32,24 +33,24 @@ class TopLevelNavigationTest {
             backStacks = stacks,
             selectedIndexState = mutableIntStateOf(value = 0),
         )
-        val playlistStack = stacks.getValue(TopLevelDestination.PLAYLISTS.route)
+        val settingsStack = stacks.getValue(TopLevelDestination.SETTINGS.route)
 
-        state.switchTo(TopLevelDestination.PLAYLISTS.route)
-        playlistStack += PlaylistDetailRoute(playlistId = 7)
+        state.switchTo(TopLevelDestination.SETTINGS.route)
+        settingsStack += AppearancePreferencesRoute
         state.switchTo(TopLevelDestination.MEDIA.route)
-        state.switchTo(TopLevelDestination.PLAYLISTS.route)
+        state.switchTo(TopLevelDestination.SETTINGS.route)
 
         assertEquals(
             listOf(
-                TopLevelDestination.PLAYLISTS.route,
-                PlaylistDetailRoute(playlistId = 7),
+                TopLevelDestination.SETTINGS.route,
+                AppearancePreferencesRoute,
             ),
             state.currentStack,
         )
     }
 
     @Test
-    fun shortcutSelectsPlaylistAndReplacesPreviousPlaylistStack() {
+    fun goBackFromSettingsRootReturnsToMediaTab() {
         val stacks = TopLevelDestination.entries.associate { destination ->
             destination.route to NavBackStack<NavKey>(destination.route)
         }
@@ -58,31 +59,14 @@ class TopLevelNavigationTest {
             backStacks = stacks,
             selectedIndexState = mutableIntStateOf(value = 0),
         )
-        stacks.getValue(
-            TopLevelDestination.PLAYLISTS.route,
-        ).add(element = PlaylistDetailRoute(playlistId = 7))
-        state.switchTo(TopLevelDestination.NETWORK.route)
 
-        state.openPlaylist(playlistId = 42)
-        state.openPlaylist(playlistId = 42)
+        state.switchTo(TopLevelDestination.SETTINGS.route)
+        state.goBack()
 
         assertEquals(
-            TopLevelDestination.PLAYLISTS.route,
-            state.topLevelRoute,
+            SettingsRoute,
+            stacks.getValue(TopLevelDestination.SETTINGS.route).first(),
         )
-        assertEquals(
-            listOf(
-                TopLevelDestination.PLAYLISTS.route,
-                PlaylistDetailRoute(playlistId = 42),
-            ),
-            state.currentStack,
-        )
-        state.goBack()
-        assertEquals(
-            listOf(TopLevelDestination.PLAYLISTS.route),
-            state.currentStack,
-        )
-        state.goBack()
         assertEquals(
             TopLevelDestination.MEDIA.route,
             state.topLevelRoute,

@@ -1,6 +1,9 @@
 package dev.anilbeesetti.nextplayer
 
 import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasContentDescription
@@ -36,7 +39,13 @@ class TvSettingsFocusTest {
     @Before
     fun openSettings() {
         assumeTrue(composeRule.activity.isTelevision)
-        composeRule.onNodeWithContentDescription(label = text(R.string.settings)).performClick()
+        // The TV navigation rail has no labels, so select the Settings tab by its position.
+        composeRule.onAllNodes(
+            matcher = SemanticsMatcher.expectValue(
+                SemanticsProperties.Role,
+                Role.Tab,
+            ),
+        )[2].performClick()
         focused(R.string.appearance_name)
     }
 

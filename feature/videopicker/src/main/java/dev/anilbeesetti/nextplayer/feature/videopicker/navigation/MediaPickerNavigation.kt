@@ -23,7 +23,6 @@ fun EntryProviderScope<NavKey>.mediaPickerEntry(
     onPlayVideo: (uri: Uri) -> Unit,
     onPlayVideos: (uris: List<Uri>) -> Unit,
     onFolderClick: (folderPath: String) -> Unit,
-    onSettingsClick: () -> Unit,
     onSearchClick: () -> Unit,
     onVaultClick: () -> Unit,
 ) {
@@ -33,7 +32,6 @@ fun EntryProviderScope<NavKey>.mediaPickerEntry(
             playVideo = onPlayVideo,
             playVideos = onPlayVideos,
             openFolder = onFolderClick,
-            openSettings = onSettingsClick,
             openSearch = onSearchClick,
             openVault = onVaultClick,
         )

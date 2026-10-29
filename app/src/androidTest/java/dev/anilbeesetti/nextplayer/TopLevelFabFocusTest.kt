@@ -47,7 +47,7 @@ class TopLevelFabFocusTest {
     fun homeFabUpReturnsToContent() = checkFabUp(tabIndex = 0)
 
     @Test
-    fun playlistsFabUpReturnsToContent() = checkFabUp(tabIndex = 1)
+    fun networkFabUpReturnsToContent() = checkFabUp(tabIndex = 1)
 
     @Test
     fun moreFabUpReturnsToContent() = checkFabUp(tabIndex = 3)
@@ -65,12 +65,11 @@ class TopLevelFabFocusTest {
     @Test
     fun switchingTabsKeepsFabUpInTheCurrentScreen() {
         listOf(
-            2,
+            1,
             0,
             3,
             1,
             0,
-            2,
             3,
         ).forEach(action = ::checkFabUp)
     }

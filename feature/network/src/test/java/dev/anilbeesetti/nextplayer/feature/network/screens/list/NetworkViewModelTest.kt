@@ -341,8 +341,6 @@ class NetworkViewModelTest {
                     addConnection = {},
                     editConnection = {},
                     openConnection = {},
-                    openSettings = {},
-                    openStream = {},
                 ),
                 repository = FakeNetworkConnectionRepository(
                     connection = null,
@@ -357,8 +355,6 @@ class NetworkViewModelTest {
                     addConnection = {},
                     editConnection = {},
                     openConnection = {},
-                    openSettings = {},
-                    openStream = {},
                 ),
                 repository = FakeNetworkConnectionRepository(
                     connection = connection(privateKeyFileName = "delete.key"),
@@ -373,8 +369,6 @@ class NetworkViewModelTest {
                     addConnection = {},
                     editConnection = {},
                     openConnection = {},
-                    openSettings = {},
-                    openStream = {},
                 ),
                 repository = FakeNetworkConnectionRepository(
                     connection = connection(privateKeyFileName = "cleanup.key"),

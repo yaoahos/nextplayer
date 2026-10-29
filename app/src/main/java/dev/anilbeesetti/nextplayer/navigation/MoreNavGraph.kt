@@ -12,13 +12,16 @@ import dev.anilbeesetti.nextplayer.feature.more.navigation.navigateToTrash
 import dev.anilbeesetti.nextplayer.feature.more.navigation.trashEntry
 import dev.anilbeesetti.nextplayer.feature.videopicker.navigation.navigateToVault
 import dev.anilbeesetti.nextplayer.feature.videopicker.navigation.vaultEntry
-import dev.anilbeesetti.nextplayer.settings.navigation.navigateToSettings
 
-fun EntryProviderScope<NavKey>.moreNavGraph(context: Context, backStack: NavBackStack<NavKey>) {
+fun EntryProviderScope<NavKey>.moreNavGraph(
+    context: Context,
+    backStack: NavBackStack<NavKey>,
+    onOpenSettings: () -> Unit,
+) {
     moreEntry(
         onHistoryClick = backStack::navigateToHistory,
         onPlayVideo = { context.startPlayback(it.toUri()) },
-        onSettingsClick = backStack::navigateToSettings,
+        onSettingsClick = onOpenSettings,
         onTrashClick = backStack::navigateToTrash,
         onVaultClick = backStack::navigateToVault,
     )

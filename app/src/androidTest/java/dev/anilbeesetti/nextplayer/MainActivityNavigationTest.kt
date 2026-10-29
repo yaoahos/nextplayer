@@ -28,6 +28,7 @@ class MainActivityNavigationTest {
         recreateHome()
         val settings = composeRule.activity.getString(R.string.settings)
 
+        // The Settings tab in the navigation bar opens the settings screen.
         composeRule.onNodeWithContentDescription(label = settings).performClick()
 
         composeRule.onNodeWithText(text = settings).assertIsDisplayed()

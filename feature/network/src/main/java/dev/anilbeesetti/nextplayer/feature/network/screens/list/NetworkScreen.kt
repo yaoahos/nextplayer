@@ -7,13 +7,11 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
@@ -33,8 +31,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -42,7 +38,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.PreviewLightDark
 import androidx.compose.ui.unit.dp
-import androidx.core.net.toUri
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.anilbeesetti.nextplayer.core.model.NetworkConnection
 import dev.anilbeesetti.nextplayer.core.model.NetworkProtocol
@@ -50,11 +45,9 @@ import dev.anilbeesetti.nextplayer.core.ui.R
 import dev.anilbeesetti.nextplayer.core.ui.components.BindTopLevelFab
 import dev.anilbeesetti.nextplayer.core.ui.components.LocalNavigationBottomPadding
 import dev.anilbeesetti.nextplayer.core.ui.components.NextDialog
-import dev.anilbeesetti.nextplayer.core.ui.components.NextOutlinedTextField
 import dev.anilbeesetti.nextplayer.core.ui.components.NextSegmentedListItem
 import dev.anilbeesetti.nextplayer.core.ui.components.NextTopAppBar
 import dev.anilbeesetti.nextplayer.core.ui.components.TopLevelFabKey
-import dev.anilbeesetti.nextplayer.core.ui.components.thenIf
 import dev.anilbeesetti.nextplayer.core.ui.components.tvFocusRing
 import dev.anilbeesetti.nextplayer.core.ui.components.tvListFocus
 import dev.anilbeesetti.nextplayer.core.ui.designsystem.NextIcons
@@ -74,15 +67,11 @@ fun NetworkScreen(viewModel: NetworkViewModel) {
 @Composable
 internal fun NetworkScreenContent(state: NetworkUiState, onAction: (NetworkAction) -> Unit) {
     var connectionToDelete by remember { mutableStateOf<NetworkConnection?>(value = null) }
-    var streamUrl by rememberSaveable { mutableStateOf(value = "") }
-    val trimmedStreamUrl = streamUrl.trim()
-    val fabUpFocusRequester = remember { FocusRequester() }
 
     val showEmptyState = state.connections.isEmpty() && !state.isLoading
     BindTopLevelFab(
         key = TopLevelFabKey.NETWORK,
         icon = NextIcons.Add,
-        upFocusRequester = fabUpFocusRequester,
         onClick = { onAction(NetworkAction.AddConnection) },
     )
     val navigationBottomPadding = LocalNavigationBottomPadding.current
@@ -92,19 +81,6 @@ internal fun NetworkScreenContent(state: NetworkUiState, onAction: (NetworkActio
             NextTopAppBar(
                 title = stringResource(R.string.network),
                 fontWeight = FontWeight.Bold,
-                actions = {
-                    IconButton(
-                        onClick = {
-                            onAction(NetworkAction.OpenSettings)
-                        },
-                        modifier = Modifier.tvFocusRing(),
-                    ) {
-                        Icon(
-                            imageVector = NextIcons.Settings,
-                            contentDescription = stringResource(R.string.settings),
-                        )
-                    }
-                },
             )
         },
         containerColor = MaterialTheme.colorScheme.surfaceContainer,
@@ -130,17 +106,6 @@ internal fun NetworkScreenContent(state: NetworkUiState, onAction: (NetworkActio
                 ),
                 verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
-                item {
-                    NetworkStreamCard(
-                        url = streamUrl,
-                        onUrlChange = { streamUrl = it },
-                        onOpenStream = {
-                            onAction(NetworkAction.OpenStream(trimmedStreamUrl.toUri()))
-                        },
-                        enabled = trimmedStreamUrl.isNotEmpty(),
-                        fabUpFocusRequester = fabUpFocusRequester,
-                    )
-                }
                 if (showEmptyState) {
                     item { NetworkEmptyState() }
                 } else {
@@ -188,55 +153,6 @@ internal fun NetworkScreenContent(state: NetworkUiState, onAction: (NetworkActio
                 }
             },
         )
-    }
-}
-
-@Composable
-private fun NetworkStreamCard(
-    modifier: Modifier = Modifier,
-    url: String,
-    onUrlChange: (String) -> Unit,
-    onOpenStream: () -> Unit,
-    enabled: Boolean,
-    fabUpFocusRequester: FocusRequester,
-) {
-    Column(
-        modifier = modifier
-            .clip(shape = RoundedCornerShape(24.dp))
-            .background(MaterialTheme.colorScheme.surfaceColorAtElevation(1.dp))
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Text(
-            text = stringResource(R.string.network_stream),
-            style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.Bold,
-        )
-        Text(
-            text = stringResource(R.string.enter_a_network_url),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        NextOutlinedTextField(
-            value = url,
-            onValueChange = onUrlChange,
-            modifier = Modifier
-                .fillMaxWidth()
-                .thenIf(condition = !enabled) {
-                    focusRequester(focusRequester = fabUpFocusRequester)
-                },
-            placeholder = { Text(text = stringResource(R.string.example_url)) },
-            singleLine = true,
-        )
-        Button(
-            onClick = onOpenStream,
-            enabled = enabled,
-            modifier = Modifier
-                .align(Alignment.End)
-                .thenIf(condition = enabled) {
-                    focusRequester(focusRequester = fabUpFocusRequester)
-                },
-        ) { Text(text = stringResource(R.string.open_network_stream)) }
     }
 }
 

@@ -73,7 +73,6 @@ class MediaPickerViewModel(
         val playVideo: (Uri) -> Unit,
         val playVideos: (List<Uri>) -> Unit,
         val openFolder: (String) -> Unit,
-        val openSettings: () -> Unit,
         val openSearch: () -> Unit,
         val openVault: () -> Unit,
     )
@@ -111,8 +110,6 @@ class MediaPickerViewModel(
             is MediaPickerAction.OnPlayVideo -> output.playVideo(action.uri)
 
             is MediaPickerAction.OnFolderClick -> output.openFolder(action.folderPath)
-
-            is MediaPickerAction.OnSettingsClick -> output.openSettings()
 
             is MediaPickerAction.OnSearchClick -> output.openSearch()
 
@@ -618,7 +615,6 @@ sealed interface MediaPickerAction {
     data object OnNavigateUpClick : MediaPickerAction
     data class OnPlayVideo(val uri: Uri) : MediaPickerAction
     data class OnFolderClick(val folderPath: String) : MediaPickerAction
-    data object OnSettingsClick : MediaPickerAction
     data object OnSearchClick : MediaPickerAction
     data object OnVaultClick : MediaPickerAction
     data object Refresh : MediaPickerAction

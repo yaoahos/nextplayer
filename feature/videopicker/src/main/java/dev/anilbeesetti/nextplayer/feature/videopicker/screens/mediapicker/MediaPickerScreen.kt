@@ -328,15 +328,6 @@ internal fun MediaPickerScreenContent(
                                 contentDescription = stringResource(id = R.string.menu),
                             )
                         }
-                        IconButton(
-                            onClick = { onAction(MediaPickerAction.OnSettingsClick) },
-                            modifier = topBarDownModifier.tvFocusRing(isTv = isTv),
-                        ) {
-                            Icon(
-                                imageVector = NextIcons.Settings,
-                                contentDescription = stringResource(id = R.string.settings),
-                            )
-                        }
                     }
                 },
             )

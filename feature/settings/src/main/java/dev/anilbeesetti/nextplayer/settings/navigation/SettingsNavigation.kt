@@ -1,7 +1,6 @@
 package dev.anilbeesetti.nextplayer.settings.navigation
 
 import androidx.navigation3.runtime.EntryProviderScope
-import androidx.navigation3.runtime.NavBackStack
 import androidx.navigation3.runtime.NavKey
 import dev.anilbeesetti.nextplayer.settings.Setting
 import dev.anilbeesetti.nextplayer.settings.SettingsOutput
@@ -10,10 +9,6 @@ import kotlinx.serialization.Serializable
 
 @Serializable
 object SettingsRoute : NavKey
-
-fun NavBackStack<NavKey>.navigateToSettings() {
-    add(element = SettingsRoute)
-}
 
 fun EntryProviderScope<NavKey>.settingsEntry(
     onNavigateUp: () -> Unit,

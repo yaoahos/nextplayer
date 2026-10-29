@@ -1,6 +1,5 @@
 package dev.anilbeesetti.nextplayer
 
-import android.content.Intent
 import android.graphics.Color
 import android.os.Bundle
 import androidx.activity.SystemBarStyle
@@ -77,8 +76,6 @@ import dev.anilbeesetti.nextplayer.navigation.mediaNavGraph
 import dev.anilbeesetti.nextplayer.navigation.moreNavGraph
 import dev.anilbeesetti.nextplayer.navigation.navigationTransition
 import dev.anilbeesetti.nextplayer.navigation.networkNavGraph
-import dev.anilbeesetti.nextplayer.navigation.openPlaylist
-import dev.anilbeesetti.nextplayer.navigation.playlistNavGraph
 import dev.anilbeesetti.nextplayer.navigation.rememberTopLevelNavState
 import dev.anilbeesetti.nextplayer.navigation.settingsNavGraph
 import org.koin.android.ext.android.inject
@@ -92,20 +89,9 @@ class MainActivity : FragmentActivity() {
 
     private val viewModel: MainViewModel by viewModel()
 
-    private var pendingPlaylistId by mutableStateOf<Long?>(value = null)
-
-    override fun onNewIntent(intent: Intent) {
-        super.onNewIntent(intent)
-        setIntent(intent)
-        pendingPlaylistId = PlaylistShortcut.playlistId(intent = intent)
-    }
-
     @OptIn(ExperimentalPermissionsApi::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        if (savedInstanceState == null) {
-            pendingPlaylistId = PlaylistShortcut.playlistId(intent = intent)
-        }
         systemService.initialize(activity = this@MainActivity)
         mediaOperationsService.initialize(activity = this@MainActivity)
 
@@ -143,30 +129,22 @@ class MainActivity : FragmentActivity() {
                 ) {
                     val navState = rememberTopLevelNavState()
 
-                    LaunchedEffect(key1 = pendingPlaylistId) {
-                        pendingPlaylistId?.let { playlistId ->
-                            navState.openPlaylist(playlistId = playlistId)
-                            pendingPlaylistId = null
-                        }
-                    }
-
                     val mediaStack = navState.backStacks.getValue(TopLevelDestination.MEDIA.route)
-                    val playlistStack = navState.backStacks.getValue(
-                        TopLevelDestination.PLAYLISTS.route,
-                    )
                     val networkStack = navState.backStacks.getValue(
                         TopLevelDestination.NETWORK.route,
                     )
                     val moreStack = navState.backStacks.getValue(TopLevelDestination.MORE.route)
+                    val settingsStack = navState.backStacks.getValue(
+                        TopLevelDestination.SETTINGS.route,
+                    )
+                    val openSettings: () -> Unit = {
+                        navState.switchTo(route = TopLevelDestination.SETTINGS.route)
+                    }
 
                     val provider = entryProvider {
                         mediaNavGraph(
                             context = this@MainActivity,
                             backStack = mediaStack,
-                        )
-                        playlistNavGraph(
-                            context = this@MainActivity,
-                            backStack = playlistStack,
                         )
                         networkNavGraph(
                             context = this@MainActivity,
@@ -175,8 +153,12 @@ class MainActivity : FragmentActivity() {
                         moreNavGraph(
                             context = this@MainActivity,
                             backStack = moreStack,
+                            onOpenSettings = openSettings,
                         )
-                        settingsNavGraph(backStack = navState.currentStack)
+                        settingsNavGraph(
+                            backStack = settingsStack,
+                            onClose = navState::goBack,
+                        )
                     }
 
                     val topLevelFabStates =
@@ -276,11 +258,20 @@ fun NavigationLayout(
     val showNavigation =
         state.currentStack.lastOrNull()?.let { state.topLevelContentKeys.contains(element = it) } ==
             true
-    val selectedFabState = state.destinations[state.selectedIndex].fabKey?.let(
-        block = fabStates::get,
-    )
+    val selectedFabKey = state.destinations[state.selectedIndex].fabKey
+    val selectedFabState = selectedFabKey?.let(block = fabStates::get)
     var displayedFabState by remember { mutableStateOf<TopLevelFabState?>(value = null) }
-    LaunchedEffect(key1 = selectedFabState) { selectedFabState?.let { displayedFabState = it } }
+    LaunchedEffect(
+        key1 = selectedFabKey,
+        key2 = selectedFabState,
+    ) {
+        // A tab without a FAB must not keep showing the FAB of the tab it replaced.
+        displayedFabState = when {
+            selectedFabKey == null -> null
+            selectedFabState != null -> selectedFabState
+            else -> displayedFabState
+        }
+    }
 
     Box(modifier = Modifier.fillMaxSize()) {
         Scaffold(

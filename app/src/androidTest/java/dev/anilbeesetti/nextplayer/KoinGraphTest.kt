@@ -22,8 +22,6 @@ import dev.anilbeesetti.nextplayer.feature.network.screens.addconnection.AddConn
 import dev.anilbeesetti.nextplayer.feature.network.screens.browse.NetworkBrowseViewModel
 import dev.anilbeesetti.nextplayer.feature.network.screens.list.NetworkViewModel
 import dev.anilbeesetti.nextplayer.feature.player.PlayerViewModel
-import dev.anilbeesetti.nextplayer.feature.playlist.screens.detail.PlaylistDetailViewModel
-import dev.anilbeesetti.nextplayer.feature.playlist.screens.list.PlaylistListViewModel
 import dev.anilbeesetti.nextplayer.feature.videopicker.screens.mediapicker.MediaPickerViewModel
 import dev.anilbeesetti.nextplayer.feature.videopicker.screens.search.SearchViewModel
 import dev.anilbeesetti.nextplayer.feature.videopicker.screens.vault.VaultViewModel
@@ -143,8 +141,6 @@ class KoinGraphTest {
                         addConnection = {},
                         editConnection = {},
                         openConnection = {},
-                        openSettings = {},
-                        openStream = {},
                     ),
                 )
                 viewModel<AddConnectionViewModel>(
@@ -162,21 +158,6 @@ class KoinGraphTest {
                         navigateUp = {},
                         playVideos = { _, _ -> },
                         openFolder = { _, _ -> },
-                    ),
-                )
-                viewModel<PlaylistListViewModel>(
-                    store = store,
-                    PlaylistListViewModel.Output(
-                        openPlaylist = {},
-                        openSettings = {},
-                    ),
-                )
-                viewModel<PlaylistDetailViewModel>(
-                    store = store,
-                    PlaylistDetailViewModel.Input(playlistId = -1),
-                    PlaylistDetailViewModel.Output(
-                        navigateUp = {},
-                        playPlaylist = { _, _ -> },
                     ),
                 )
                 viewModel<SearchViewModel>(
@@ -252,7 +233,6 @@ class KoinGraphTest {
                     playVideo = {},
                     playVideos = {},
                     openFolder = {},
-                    openSettings = {},
                     openSearch = {},
                     openVault = {},
                 )

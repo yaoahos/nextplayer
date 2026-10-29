@@ -48,3 +48,6 @@ vendor/
 .junie
 docs/
 .superpowers
+
+# Local release artifacts
+dist/

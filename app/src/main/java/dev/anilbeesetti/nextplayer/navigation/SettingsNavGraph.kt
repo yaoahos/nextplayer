@@ -28,9 +28,12 @@ import dev.anilbeesetti.nextplayer.settings.navigation.settingsEntry
 import dev.anilbeesetti.nextplayer.settings.navigation.subtitlePreferencesEntry
 import dev.anilbeesetti.nextplayer.settings.navigation.thumbnailPreferencesEntry
 
-fun EntryProviderScope<NavKey>.settingsNavGraph(backStack: NavBackStack<NavKey>) {
+fun EntryProviderScope<NavKey>.settingsNavGraph(
+    backStack: NavBackStack<NavKey>,
+    onClose: () -> Unit,
+) {
     settingsEntry(
-        onNavigateUp = { backStack.removeLastIfNotRoot() },
+        onNavigateUp = onClose,
         onItemClick = { setting ->
             when (setting) {
                 Setting.APPEARANCE -> backStack.navigateToAppearancePreferences()
