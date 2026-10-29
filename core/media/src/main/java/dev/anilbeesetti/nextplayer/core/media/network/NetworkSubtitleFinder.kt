@@ -3,6 +3,9 @@ package dev.anilbeesetti.nextplayer.core.media.network
 import android.net.Uri
 import androidx.media3.common.util.UnstableApi
 import dev.anilbeesetti.nextplayer.core.model.NetworkFile
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import org.koin.core.annotation.Single
 
@@ -19,7 +22,7 @@ import org.koin.core.annotation.Single
 @Single
 class NetworkSubtitleFinder(
     private val connectionResolver: NetworkConnectionResolver,
-    private val clientFactory: NetworkClientFactory,
+    private val clientPool: NetworkClientPool,
 ) {
 
     suspend fun findSameNameSubtitles(uri: Uri, excludeSubs: List<Uri> = emptyList()): List<Uri> {
@@ -44,10 +47,11 @@ class NetworkSubtitleFinder(
             .toSet()
 
         return withTimeoutOrNull(timeMillis = FIND_TIMEOUT_MS) {
-            val client = clientFactory.create(connection = target.connection)
+            val lease = clientPool.acquire(connection = target.connection)
+                ?: return@withTimeoutOrNull emptyList()
+            var reusable = true
             try {
-                client.connect().getOrThrow()
-                val listing = client.listFiles(path = directory).getOrNull()
+                val listing = lease.client.listFiles(path = directory).getOrNull()
                 listing
                     .orEmpty()
                     .filter { file -> file.isSubtitleFor(videoName = baseName) }
@@ -62,10 +66,19 @@ class NetworkSubtitleFinder(
                         )
                         subtitleUri.takeUnless { it.toString() in excluded }
                     }
+            } catch (cancellation: CancellationException) {
+                reusable = false
+                throw cancellation
             } catch (_: Exception) {
+                reusable = false
                 emptyList()
             } finally {
-                runCatching { client.disconnect() }
+                withContext(NonCancellable) {
+                    clientPool.release(
+                        lease = lease,
+                        reusable = reusable,
+                    )
+                }
             }
         } ?: emptyList()
     }

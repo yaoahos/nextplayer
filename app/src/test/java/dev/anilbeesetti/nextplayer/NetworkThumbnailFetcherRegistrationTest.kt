@@ -14,6 +14,7 @@ import coil3.request.Options
 import coil3.request.SuccessResult
 import coil3.toAndroidUri
 import dev.anilbeesetti.nextplayer.core.media.network.NetworkClientFactory
+import dev.anilbeesetti.nextplayer.core.media.network.NetworkClientPool
 import dev.anilbeesetti.nextplayer.core.media.network.NetworkConnectionResolver
 import dev.anilbeesetti.nextplayer.core.media.network.NetworkVideoThumbnailFetcher
 import kotlinx.coroutines.runBlocking
@@ -72,7 +73,9 @@ class NetworkThumbnailFetcherRegistrationTest {
         val context = RuntimeEnvironment.getApplication()
         val fetcher = NetworkVideoThumbnailFetcher(
             connectionResolver = NetworkConnectionResolver { null },
-            clientFactory = NetworkClientFactory { error("No client should be created") },
+            clientPool = NetworkClientPool(
+                clientFactory = NetworkClientFactory { error("No client should be created") },
+            ),
         )
 
         val imageLoader = ImageLoader.Builder(context)

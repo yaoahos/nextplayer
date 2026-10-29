@@ -24,7 +24,9 @@ import java.io.InputStream
 import java.io.RandomAccessFile
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
@@ -50,7 +52,7 @@ import org.koin.core.annotation.Single
 @Single
 class NetworkVideoThumbnailFetcher(
     private val connectionResolver: NetworkConnectionResolver,
-    private val clientFactory: NetworkClientFactory,
+    private val clientPool: NetworkClientPool,
 ) : Fetcher.Factory<CoilUri> {
 
     override fun create(data: CoilUri, options: Options, imageLoader: ImageLoader): Fetcher? {
@@ -88,9 +90,11 @@ class NetworkVideoThumbnailFetcher(
             ) ?: return@withContext null
 
             thumbnailSlots.withPermit {
-                val client = clientFactory.create(connection = target.connection)
+                val lease = clientPool.acquire(connection = target.connection)
+                    ?: return@withPermit null
+                var reusable = true
                 try {
-                    client.connect().getOrThrow()
+                    val client = lease.client
                     val size = client.fileSize(path = target.filePath)
                     if (size <= 0L) return@withPermit null
                     decodeSparseCopy(
@@ -102,10 +106,21 @@ class NetworkVideoThumbnailFetcher(
                         path = target.filePath,
                         size = size,
                     )
+                } catch (cancellation: CancellationException) {
+                    // The read is blocked in the client, so give the client up instead of lending it
+                    // out while the abandoned read may still be using it.
+                    reusable = false
+                    throw cancellation
                 } catch (_: Exception) {
+                    reusable = false
                     null
                 } finally {
-                    runCatching { client.disconnect() }
+                    withContext(NonCancellable) {
+                        clientPool.release(
+                            lease = lease,
+                            reusable = reusable,
+                        )
+                    }
                 }
             }
         }
