@@ -11,11 +11,8 @@ import android.os.Parcelable
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
-import androidx.media3.datasource.DataSource
-import androidx.media3.datasource.DataSpec
 import dev.anilbeesetti.nextplayer.core.common.extensions.convertToUTF8
 import dev.anilbeesetti.nextplayer.core.common.extensions.getFilenameFromUri
-import dev.anilbeesetti.nextplayer.core.media.network.NetworkUri
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
@@ -24,9 +21,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
 
 fun Uri.getSubtitleMime(): String = when {
     path?.endsWith(suffix = ".ssa") == true || path?.endsWith(suffix = ".ass") == true -> {
@@ -85,25 +80,24 @@ private val remoteSubtitleExtensions = listOf(
     "ttml",
 )
 
-private val remoteSubtitleSchemes = setOf(
+private val httpSubtitleSchemes = setOf(
     "http",
     "https",
-) + NetworkUri.schemes
+)
 
 private const val REMOTE_SUBTITLE_TIMEOUT_MS = 2_000
 
 /**
- * Finds the subtitles published next to a remote video, mirroring [getSubtitles] for local files.
- * Candidates keep the query of the video, so credentials carried there (a saved connection id, an
- * SFTP host key) still apply. Each candidate is probed in parallel and the probe gives up after
- * [REMOTE_SUBTITLE_TIMEOUT_MS], so a missing subtitle never delays playback for long.
+ * Finds the subtitles published next to an HTTP video, mirroring [getSubtitles] for local files.
+ * Candidates keep the query of the video, so credentials carried there still apply. Each candidate
+ * is probed in parallel and the probe gives up after [REMOTE_SUBTITLE_TIMEOUT_MS], so a missing
+ * subtitle never delays playback for long.
  */
 suspend fun Uri.getRemoteSubtitles(
     excludeSubsList: List<Uri> = emptyList(),
     existingSubsList: List<Uri> = emptyList(),
-    dataSourceFactory: DataSource.Factory? = null,
 ): List<Uri> = withContext(Dispatchers.IO) {
-    if (scheme?.lowercase() !in remoteSubtitleSchemes) return@withContext emptyList()
+    if (scheme?.lowercase() !in httpSubtitleSchemes) return@withContext emptyList()
 
     val baseUri = sameNameBase()
     val excludedUrls = (excludeSubsList + existingSubsList)
@@ -115,14 +109,7 @@ suspend fun Uri.getRemoteSubtitles(
             .map { extension -> baseUri.withExtension(extension = extension) }
             .filterNot { candidate -> candidate.toString() in excludedUrls }
             .map { candidate ->
-                async {
-                    candidate.takeIf {
-                        isRemoteFileAvailable(
-                            uri = it,
-                            dataSourceFactory = dataSourceFactory,
-                        )
-                    }
-                }
+                async { candidate.takeIf { isHttpFileAvailable(url = it.toString()) } }
             }
             .awaitAll()
             .filterNotNull()
@@ -148,31 +135,6 @@ private fun Uri.sameNameBase(): Uri {
 
 private fun Uri.withExtension(extension: String): Uri =
     buildUpon().encodedPath("$encodedPath.$extension").build()
-
-private suspend fun isRemoteFileAvailable(
-    uri: Uri,
-    dataSourceFactory: DataSource.Factory?,
-): Boolean {
-    if (uri.scheme?.lowercase() in setOf(
-            "http",
-            "https",
-        )
-    ) {
-        return isHttpFileAvailable(url = uri.toString())
-    }
-    // Only the player's data source knows how to reach SMB/FTP/SFTP/WebDAV hosts, so ask it.
-    val factory = dataSourceFactory ?: return false
-    return withTimeoutOrNull(timeMillis = REMOTE_SUBTITLE_TIMEOUT_MS.toLong()) {
-        runInterruptible(Dispatchers.IO) {
-            val dataSource = factory.createDataSource()
-            try {
-                runCatching { dataSource.open(DataSpec(uri)) }.isSuccess
-            } finally {
-                dataSource.close()
-            }
-        }
-    } ?: false
-}
 
 private fun isHttpFileAvailable(url: String): Boolean {
     val connection = runCatching {

@@ -46,6 +46,7 @@ import dev.anilbeesetti.nextplayer.core.common.extensions.getPath
 import dev.anilbeesetti.nextplayer.core.common.extensions.subtitleCacheDir
 import dev.anilbeesetti.nextplayer.core.data.repository.MediaRepository
 import dev.anilbeesetti.nextplayer.core.data.repository.PreferencesRepository
+import dev.anilbeesetti.nextplayer.core.media.network.NetworkSubtitleFinder
 import dev.anilbeesetti.nextplayer.core.media.network.NetworkUri
 import dev.anilbeesetti.nextplayer.core.media.network.datasource.NextDataSourceFactory
 import dev.anilbeesetti.nextplayer.core.model.LoopMode
@@ -110,6 +111,8 @@ class PlayerService : MediaSessionService() {
     private val preferencesRepository: PreferencesRepository by inject()
 
     private val dataSourceFactory: NextDataSourceFactory by inject()
+
+    private val networkSubtitleFinder: NetworkSubtitleFinder by inject()
 
     private val mediaRepository: MediaRepository by inject()
 
@@ -959,21 +962,33 @@ class PlayerService : MediaSessionService() {
                 }
                 val existingSubConfigurations =
                     mediaItem.localConfiguration?.subtitleConfigurations ?: emptyList()
-                val sameNameSubs = if (isNetwork) {
-                    // Network videos have no local directory to scan, so look for subtitles
-                    // published next to the video instead.
-                    uri.getRemoteSubtitles(
-                        excludeSubsList = externalSubs,
-                        existingSubsList = existingSubConfigurations.map { it.uri },
-                        dataSourceFactory = dataSourceFactory,
-                    )
-                } else {
-                    (videoState?.path ?: getPath(uri = uri))?.let {
-                        File(it).getLocalSubtitles(
-                            context = this@PlayerService,
-                            excludeSubsList = externalSubs,
+                val sameNameSubs = when {
+                    // A saved connection is only reachable through its own client, so list the
+                    // directory once instead of probing every candidate URI.
+                    NetworkUri.isNetworkUri(uri = uri) -> {
+                        networkSubtitleFinder.findSameNameSubtitles(
+                            uri = uri,
+                            excludeSubs = externalSubs + existingSubConfigurations.map { it.uri },
                         )
-                    } ?: emptyList()
+                    }
+
+                    isNetwork -> {
+                        // Subtitles published next to an HTTP stream, fetched directly so the
+                        // player's own data source is never blocked by a missing file.
+                        uri.getRemoteSubtitles(
+                            excludeSubsList = externalSubs,
+                            existingSubsList = existingSubConfigurations.map { it.uri },
+                        )
+                    }
+
+                    else -> {
+                        (videoState?.path ?: getPath(uri = uri))?.let {
+                            File(it).getLocalSubtitles(
+                                context = this@PlayerService,
+                                excludeSubsList = externalSubs,
+                            )
+                        } ?: emptyList()
+                    }
                 }
 
                 val subConfigurations = (sameNameSubs + externalSubs).map { subtitleUri ->

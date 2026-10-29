@@ -78,6 +78,22 @@ object NetworkUri {
 
     fun connectionIdOf(uri: Uri): Long? = uri.getQueryParameter(CONNECTION_ID_PARAM)?.toLongOrNull()
 
+    /**
+     * Resolves the connection and the path a playback URI points at: the saved connection its
+     * `cid` names when there is one, the credentials carried by the URI itself otherwise.
+     */
+    suspend fun targetOf(uri: Uri, connectionResolver: NetworkConnectionResolver): Target? {
+        val connectionId = connectionIdOf(uri = uri) ?: return adHocTargetOf(uri = uri)
+        val connection = connectionResolver.connection(id = connectionId) ?: return null
+        return Target(
+            connection = connection,
+            filePath = filePathOf(
+                uri = uri,
+                protocol = connection.protocol,
+            ),
+        )
+    }
+
     /** Restores the path in the form the [NetworkClient] for [protocol] expects. */
     fun filePathOf(uri: Uri, protocol: NetworkProtocol): String {
         val path = uri.pathSegments.joinToString(separator = "/")

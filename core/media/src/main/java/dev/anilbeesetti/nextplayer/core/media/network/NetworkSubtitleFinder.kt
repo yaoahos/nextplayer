@@ -1,0 +1,96 @@
+package dev.anilbeesetti.nextplayer.core.media.network
+
+import android.net.Uri
+import androidx.media3.common.util.UnstableApi
+import dev.anilbeesetti.nextplayer.core.model.NetworkFile
+import kotlinx.coroutines.withTimeoutOrNull
+import org.koin.core.annotation.Single
+
+/**
+ * Finds the subtitles published next to a video on a saved network connection.
+ *
+ * The player must not probe for subtitles through [NetworkSessions]: that class keeps the single
+ * client used for playback, so a probe competing for it can stall the stream that is starting.
+ * This finder therefore opens a short-lived client of its own, asks for one directory listing and
+ * disconnects again. It never throws and gives up after [FIND_TIMEOUT_MS], so a slow or missing
+ * server can only cost a subtitle, never playback.
+ */
+@UnstableApi
+@Single
+class NetworkSubtitleFinder(
+    private val connectionResolver: NetworkConnectionResolver,
+    private val clientFactory: NetworkClientFactory,
+) {
+
+    suspend fun findSameNameSubtitles(uri: Uri, excludeSubs: List<Uri> = emptyList()): List<Uri> {
+        if (!NetworkUri.isNetworkUri(uri)) return emptyList()
+        val target = NetworkUri.targetOf(
+            uri = uri,
+            connectionResolver = connectionResolver,
+        ) ?: return emptyList()
+
+        val fileName = target.filePath.substringAfterLast(delimiter = '/')
+        val baseName = fileName.substringBeforeLast(
+            delimiter = '.',
+            missingDelimiterValue = fileName,
+        )
+        if (baseName.isEmpty()) return emptyList()
+        val directory = target.filePath.substringBeforeLast(
+            delimiter = '/',
+            missingDelimiterValue = "",
+        )
+        val excluded = excludeSubs
+            .mapNotNull { subtitle -> subtitle.toString().takeUnless(String::isBlank) }
+            .toSet()
+
+        return withTimeoutOrNull(timeMillis = FIND_TIMEOUT_MS) {
+            val client = clientFactory.create(connection = target.connection)
+            try {
+                client.connect().getOrThrow()
+                val listing = client.listFiles(path = directory).getOrNull()
+                listing
+                    .orEmpty()
+                    .filter { file -> !file.isDirectory && file.baseName() == baseName }
+                    .sortedBy { file -> subtitleExtensions.indexOf(file.extension()) }
+                    .mapNotNull { file ->
+                        val subtitleUri = NetworkUri.build(
+                            connection = target.connection,
+                            filePath = joinPath(
+                                directory = directory,
+                                name = file.name,
+                            ),
+                        )
+                        subtitleUri.takeUnless { it.toString() in excluded }
+                    }
+            } catch (_: Exception) {
+                emptyList()
+            } finally {
+                runCatching { client.disconnect() }
+            }
+        } ?: emptyList()
+    }
+
+    private fun joinPath(directory: String, name: String): String = when {
+        directory.isEmpty() -> name
+        directory.endsWith(char = '/') -> directory + name
+        else -> "$directory/$name"
+    }
+
+    private fun NetworkFile.extension(): String = name.substringAfterLast(
+        delimiter = '.',
+        missingDelimiterValue = "",
+    ).lowercase()
+
+    private fun NetworkFile.baseName(): String = name.substringBeforeLast(delimiter = '.')
+
+    private companion object {
+        const val FIND_TIMEOUT_MS = 2_500L
+        val subtitleExtensions = listOf(
+            "srt",
+            "ssa",
+            "ass",
+            "vtt",
+            "ttml",
+        )
+    }
+}
