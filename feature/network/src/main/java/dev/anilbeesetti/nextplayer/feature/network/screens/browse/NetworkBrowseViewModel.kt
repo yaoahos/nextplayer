@@ -8,6 +8,7 @@ import dev.anilbeesetti.nextplayer.core.data.repository.NetworkConnectionReposit
 import dev.anilbeesetti.nextplayer.core.data.repository.PreferencesRepository
 import dev.anilbeesetti.nextplayer.core.media.network.NetworkClient
 import dev.anilbeesetti.nextplayer.core.media.network.NetworkClientFactory
+import dev.anilbeesetti.nextplayer.core.media.network.NetworkSubtitleFinder
 import dev.anilbeesetti.nextplayer.core.media.network.NetworkUri
 import dev.anilbeesetti.nextplayer.core.media.network.isNetworkVideoFile
 import dev.anilbeesetti.nextplayer.core.media.network.sftp.HostKeyMismatch
@@ -60,6 +61,7 @@ class NetworkBrowseViewModel(
     @InjectedParam internal var output: Output,
     private val repository: NetworkConnectionRepository,
     private val clientFactory: NetworkClientFactory,
+    private val subtitleFinder: NetworkSubtitleFinder,
     mediaRepository: MediaRepository,
     private val preferencesRepository: PreferencesRepository,
 ) : MviViewModel<NetworkBrowseUiState, NetworkBrowseAction>() {
@@ -200,6 +202,13 @@ class NetworkBrowseViewModel(
         viewModelScope.launch {
             client.listFiles(path = path).fold(
                 onSuccess = { files ->
+                    // The folder is already listed, so hand it to the subtitle finder and let
+                    // playback start without a second directory listing.
+                    subtitleFinder.rememberListing(
+                        connection = conn,
+                        directory = path,
+                        files = files,
+                    )
                     val visible = files
                         .filter { it.isDirectory || isNetworkVideoFile(it.name) }
 

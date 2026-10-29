@@ -6,6 +6,8 @@ import dev.anilbeesetti.nextplayer.core.data.repository.fake.FakeMediaRepository
 import dev.anilbeesetti.nextplayer.core.data.repository.fake.FakePreferencesRepository
 import dev.anilbeesetti.nextplayer.core.media.network.NetworkClient
 import dev.anilbeesetti.nextplayer.core.media.network.NetworkClientFactory
+import dev.anilbeesetti.nextplayer.core.media.network.NetworkClientPool
+import dev.anilbeesetti.nextplayer.core.media.network.NetworkSubtitleFinder
 import dev.anilbeesetti.nextplayer.core.media.network.NetworkUri
 import dev.anilbeesetti.nextplayer.core.media.network.sftp.HostKeyMismatch
 import dev.anilbeesetti.nextplayer.core.model.MediaLayoutMode
@@ -472,6 +474,10 @@ class NetworkBrowseViewModelTest {
                 connectionDelayMillis = connectionDelayMillis,
             ),
             clientFactory = factory,
+            subtitleFinder = NetworkSubtitleFinder(
+                connectionResolver = { id -> conn.takeIf { it.id == id } },
+                clientPool = NetworkClientPool(clientFactory = factory),
+            ),
             mediaRepository = mediaRepository,
             preferencesRepository = preferencesRepository,
         )
