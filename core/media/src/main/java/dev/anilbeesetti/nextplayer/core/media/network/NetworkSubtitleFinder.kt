@@ -50,7 +50,7 @@ class NetworkSubtitleFinder(
                 val listing = client.listFiles(path = directory).getOrNull()
                 listing
                     .orEmpty()
-                    .filter { file -> !file.isDirectory && file.baseName() == baseName }
+                    .filter { file -> file.isSubtitleFor(videoName = baseName) }
                     .sortedBy { file -> subtitleExtensions.indexOf(file.extension()) }
                     .mapNotNull { file ->
                         val subtitleUri = NetworkUri.build(
@@ -75,6 +75,14 @@ class NetworkSubtitleFinder(
         directory.endsWith(char = '/') -> directory + name
         else -> "$directory/$name"
     }
+
+    /**
+     * The video itself shares its base name with the subtitles, so only files that carry a
+     * subtitle extension are accepted; probing the video as a subtitle would also make the player
+     * open the stream it is about to play.
+     */
+    private fun NetworkFile.isSubtitleFor(videoName: String): Boolean =
+        !isDirectory && baseName() == videoName && extension() in subtitleExtensions
 
     private fun NetworkFile.extension(): String = name.substringAfterLast(
         delimiter = '.',
