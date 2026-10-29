@@ -59,6 +59,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.min
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
+import coil3.request.ImageRequest
 import dev.anilbeesetti.nextplayer.core.common.Utils
 import dev.anilbeesetti.nextplayer.core.common.extensions.isTelevision
 import dev.anilbeesetti.nextplayer.core.model.MediaLayoutMode
@@ -462,6 +463,7 @@ private fun NetworkFileThumbnail(
     playedPercentage: Float?,
     isGrid: Boolean,
 ) {
+    val context = LocalContext.current
     if (file.isDirectory) {
         Box(
             modifier = if (isGrid) Modifier else Modifier.padding(horizontal = 8.dp),
@@ -501,10 +503,16 @@ private fun NetworkFileThumbnail(
                 modifier = Modifier.fillMaxSize(fraction = 0.5f),
             )
             // The frame is drawn over the icon, which stays as the placeholder while it loads and
-            // as the fallback when the server refuses or the file cannot be decoded.
+            // as the fallback when the server refuses or the file cannot be decoded. The fragment
+            // keeps covers decoded by older versions, which were mostly black, out of the caches.
             if (fileUri != null) {
+                val coverRequest = remember(fileUri) {
+                    ImageRequest.Builder(context)
+                        .data(fileUri.buildUpon().fragment(COVER_CACHE_TAG).build())
+                        .build()
+                }
                 AsyncImage(
-                    model = fileUri,
+                    model = coverRequest,
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize(),
@@ -568,3 +576,5 @@ private fun formatModifiedDate(millis: Long): String {
     val context = LocalContext.current
     return remember(millis) { DateFormat.getMediumDateFormat(context).format(Date(millis)) }
 }
+
+private const val COVER_CACHE_TAG = "cover-v2"
