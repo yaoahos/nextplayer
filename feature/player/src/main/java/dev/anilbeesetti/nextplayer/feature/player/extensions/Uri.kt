@@ -1,3 +1,5 @@
+@file:OptIn(androidx.media3.common.util.UnstableApi::class)
+
 package dev.anilbeesetti.nextplayer.feature.player.extensions
 
 import android.content.ContentResolver
@@ -9,9 +11,22 @@ import android.os.Parcelable
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
+import androidx.media3.datasource.DataSource
+import androidx.media3.datasource.DataSpec
 import dev.anilbeesetti.nextplayer.core.common.extensions.convertToUTF8
 import dev.anilbeesetti.nextplayer.core.common.extensions.getFilenameFromUri
+import dev.anilbeesetti.nextplayer.core.media.network.NetworkUri
+import java.io.IOException
+import java.net.HttpURLConnection
+import java.net.URL
 import java.nio.charset.Charset
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.runInterruptible
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 fun Uri.getSubtitleMime(): String = when {
     path?.endsWith(suffix = ".ssa") == true || path?.endsWith(suffix = ".ass") == true -> {
@@ -60,6 +75,129 @@ suspend fun Context.uriToSubtitleConfiguration(
         setLabel(label)
         if (isSelected) setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
     }.build()
+}
+
+private val remoteSubtitleExtensions = listOf(
+    "srt",
+    "ssa",
+    "ass",
+    "vtt",
+    "ttml",
+)
+
+private val remoteSubtitleSchemes = setOf(
+    "http",
+    "https",
+) + NetworkUri.schemes
+
+private const val REMOTE_SUBTITLE_TIMEOUT_MS = 2_000
+
+/**
+ * Finds the subtitles published next to a remote video, mirroring [getSubtitles] for local files.
+ * Candidates keep the query of the video, so credentials carried there (a saved connection id, an
+ * SFTP host key) still apply. Each candidate is probed in parallel and the probe gives up after
+ * [REMOTE_SUBTITLE_TIMEOUT_MS], so a missing subtitle never delays playback for long.
+ */
+suspend fun Uri.getRemoteSubtitles(
+    excludeSubsList: List<Uri> = emptyList(),
+    existingSubsList: List<Uri> = emptyList(),
+    dataSourceFactory: DataSource.Factory? = null,
+): List<Uri> = withContext(Dispatchers.IO) {
+    if (scheme?.lowercase() !in remoteSubtitleSchemes) return@withContext emptyList()
+
+    val baseUri = sameNameBase()
+    val excludedUrls = (excludeSubsList + existingSubsList)
+        .mapNotNull { it.toString().takeUnless(String::isBlank) }
+        .toSet()
+
+    coroutineScope {
+        remoteSubtitleExtensions
+            .map { extension -> baseUri.withExtension(extension = extension) }
+            .filterNot { candidate -> candidate.toString() in excludedUrls }
+            .map { candidate ->
+                async {
+                    candidate.takeIf {
+                        isRemoteFileAvailable(
+                            uri = it,
+                            dataSourceFactory = dataSourceFactory,
+                        )
+                    }
+                }
+            }
+            .awaitAll()
+            .filterNotNull()
+    }
+}
+
+/**
+ * The video's URI with its extension removed, so subtitle extensions can be swapped in while the
+ * path, the authority and the query stay untouched.
+ */
+private fun Uri.sameNameBase(): Uri {
+    val path = encodedPath ?: return this
+    val extensionSeparatorIndex = path.lastIndexOf('.')
+    val nameSeparatorIndex = path.lastIndexOf('/')
+    if (extensionSeparatorIndex <= nameSeparatorIndex) return this
+    return buildUpon().encodedPath(
+        path.substring(
+            0,
+            extensionSeparatorIndex,
+        ),
+    ).build()
+}
+
+private fun Uri.withExtension(extension: String): Uri =
+    buildUpon().encodedPath("$encodedPath.$extension").build()
+
+private suspend fun isRemoteFileAvailable(
+    uri: Uri,
+    dataSourceFactory: DataSource.Factory?,
+): Boolean {
+    if (uri.scheme?.lowercase() in setOf(
+            "http",
+            "https",
+        )
+    ) {
+        return isHttpFileAvailable(url = uri.toString())
+    }
+    // Only the player's data source knows how to reach SMB/FTP/SFTP/WebDAV hosts, so ask it.
+    val factory = dataSourceFactory ?: return false
+    return withTimeoutOrNull(timeMillis = REMOTE_SUBTITLE_TIMEOUT_MS.toLong()) {
+        runInterruptible(Dispatchers.IO) {
+            val dataSource = factory.createDataSource()
+            try {
+                runCatching { dataSource.open(DataSpec(uri)) }.isSuccess
+            } finally {
+                dataSource.close()
+            }
+        }
+    } ?: false
+}
+
+private fun isHttpFileAvailable(url: String): Boolean {
+    val connection = runCatching {
+        (URL(url).openConnection() as HttpURLConnection).apply {
+            connectTimeout = REMOTE_SUBTITLE_TIMEOUT_MS
+            readTimeout = REMOTE_SUBTITLE_TIMEOUT_MS
+            instanceFollowRedirects = true
+            requestMethod = "GET"
+            setRequestProperty(
+                "Range",
+                "bytes=0-0",
+            )
+        }
+    }.getOrNull() ?: return false
+
+    return try {
+        val contentType = connection.contentType.orEmpty()
+        connection.responseCode in 200..299 &&
+            !contentType.startsWith(prefix = "text/html") &&
+            connection.inputStream.read() != -1
+    } catch (e: IOException) {
+        false
+    } finally {
+        connection.disconnect()
+    }
 }
 
 @Suppress("DEPRECATION")

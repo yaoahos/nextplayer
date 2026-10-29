@@ -61,6 +61,7 @@ import dev.anilbeesetti.nextplayer.feature.player.extensions.copy
 import dev.anilbeesetti.nextplayer.feature.player.extensions.externalAudio
 import dev.anilbeesetti.nextplayer.feature.player.extensions.externalAudioIndex
 import dev.anilbeesetti.nextplayer.feature.player.extensions.getManuallySelectedTrackIndex
+import dev.anilbeesetti.nextplayer.feature.player.extensions.getRemoteSubtitles
 import dev.anilbeesetti.nextplayer.feature.player.extensions.positionMs
 import dev.anilbeesetti.nextplayer.feature.player.extensions.setExtras
 import dev.anilbeesetti.nextplayer.feature.player.extensions.setIsScrubbingModeEnabled
@@ -956,20 +957,26 @@ class PlayerService : MediaSessionService() {
                             .getOrDefault(defaultValue = false)
                     }
                 }
-                val localSubs = if (!isNetwork) {
+                val existingSubConfigurations =
+                    mediaItem.localConfiguration?.subtitleConfigurations ?: emptyList()
+                val sameNameSubs = if (isNetwork) {
+                    // Network videos have no local directory to scan, so look for subtitles
+                    // published next to the video instead.
+                    uri.getRemoteSubtitles(
+                        excludeSubsList = externalSubs,
+                        existingSubsList = existingSubConfigurations.map { it.uri },
+                        dataSourceFactory = dataSourceFactory,
+                    )
+                } else {
                     (videoState?.path ?: getPath(uri = uri))?.let {
                         File(it).getLocalSubtitles(
                             context = this@PlayerService,
                             excludeSubsList = externalSubs,
                         )
                     } ?: emptyList()
-                } else {
-                    emptyList()
                 }
 
-                val existingSubConfigurations =
-                    mediaItem.localConfiguration?.subtitleConfigurations ?: emptyList()
-                val subConfigurations = (localSubs + externalSubs).map { subtitleUri ->
+                val subConfigurations = (sameNameSubs + externalSubs).map { subtitleUri ->
                     uriToSubtitleConfiguration(
                         uri = subtitleUri,
                         subtitleEncoding = playerPreferences.subtitleTextEncoding,
