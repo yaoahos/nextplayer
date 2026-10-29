@@ -26,7 +26,6 @@ object TrashRoute : NavKey
 fun EntryProviderScope<NavKey>.moreEntry(
     onHistoryClick: () -> Unit,
     onPlayVideo: (String) -> Unit,
-    onSettingsClick: () -> Unit,
     onTrashClick: () -> Unit,
     onVaultClick: () -> Unit,
 ) {
@@ -34,7 +33,6 @@ fun EntryProviderScope<NavKey>.moreEntry(
         val output = MoreViewModel.Output(
             openHistory = onHistoryClick,
             playVideo = onPlayVideo,
-            openSettings = onSettingsClick,
             openTrash = onTrashClick,
             openVault = onVaultClick,
         )

@@ -123,7 +123,6 @@ class KoinGraphTest {
                     MoreViewModel.Output(
                         openHistory = {},
                         playVideo = {},
-                        openSettings = {},
                         openTrash = {},
                         openVault = {},
                     ),

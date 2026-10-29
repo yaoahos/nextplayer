@@ -48,10 +48,8 @@ import dev.anilbeesetti.nextplayer.core.model.ApplicationPreferences
 import dev.anilbeesetti.nextplayer.core.model.Video
 import dev.anilbeesetti.nextplayer.core.ui.R
 import dev.anilbeesetti.nextplayer.core.ui.base.DataState
-import dev.anilbeesetti.nextplayer.core.ui.components.BindTopLevelFab
 import dev.anilbeesetti.nextplayer.core.ui.components.LocalNavigationBottomPadding
 import dev.anilbeesetti.nextplayer.core.ui.components.NextTopAppBar
-import dev.anilbeesetti.nextplayer.core.ui.components.TopLevelFabKey
 import dev.anilbeesetti.nextplayer.core.ui.components.rememberRestorableFocusState
 import dev.anilbeesetti.nextplayer.core.ui.components.restorableFocusGroup
 import dev.anilbeesetti.nextplayer.core.ui.components.restorableFocusItem
@@ -75,10 +73,6 @@ fun MoreScreen(viewModel: MoreViewModel) {
 
 @Composable
 internal fun MoreScreenContent(state: MoreUiState, onAction: (MoreAction) -> Unit) {
-    BindTopLevelFab(
-        TopLevelFabKey.MORE,
-        NextIcons.Settings,
-    ) { onAction(MoreAction.OpenSettings) }
     val filePicker =
         rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
             uri?.let { onAction(MoreAction.PlayVideo(it.toString())) }

@@ -137,9 +137,6 @@ class MainActivity : FragmentActivity() {
                     val settingsStack = navState.backStacks.getValue(
                         TopLevelDestination.SETTINGS.route,
                     )
-                    val openSettings: () -> Unit = {
-                        navState.switchTo(route = TopLevelDestination.SETTINGS.route)
-                    }
 
                     val provider = entryProvider {
                         mediaNavGraph(
@@ -153,7 +150,6 @@ class MainActivity : FragmentActivity() {
                         moreNavGraph(
                             context = this@MainActivity,
                             backStack = moreStack,
-                            onOpenSettings = openSettings,
                         )
                         settingsNavGraph(
                             backStack = settingsStack,

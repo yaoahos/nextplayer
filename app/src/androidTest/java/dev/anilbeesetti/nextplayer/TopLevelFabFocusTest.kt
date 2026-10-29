@@ -50,9 +50,6 @@ class TopLevelFabFocusTest {
     fun networkFabUpReturnsToContent() = checkFabUp(tabIndex = 1)
 
     @Test
-    fun moreFabUpReturnsToContent() = checkFabUp(tabIndex = 3)
-
-    @Test
     fun openingMoreFocusesItsFirstActionEvenAfterSwitchingTabs() {
         composeRule.onAllNodes(matcher = tab)[3].performClick()
         composeRule.onNodeWithText(text = "Vault").assertIsFocused()
@@ -67,10 +64,8 @@ class TopLevelFabFocusTest {
         listOf(
             1,
             0,
-            3,
             1,
             0,
-            3,
         ).forEach(action = ::checkFabUp)
     }
 

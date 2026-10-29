@@ -124,7 +124,6 @@ enum class TopLevelDestination(
         MoreRoute,
         NextIcons.More,
         R.string.more,
-        TopLevelFabKey.MORE,
     ),
 }
 
