@@ -15,6 +15,10 @@ import org.koin.core.annotation.Single
  * Network clients are not safe for concurrent reads, so a client is lent to exactly one caller at a
  * time. The pool hands out several clients per connection when they are requested at the same
  * moment, and those clients are reused afterwards.
+ *
+ * Nothing in here touches the network while [mutex] is held: connecting and disconnecting a client
+ * can block for a long time on a dead socket, and holding the lock across that would stall every
+ * later lookup behind it.
  */
 @Single
 class NetworkClientPool(private val clientFactory: NetworkClientFactory) {
@@ -28,7 +32,14 @@ class NetworkClientPool(private val clientFactory: NetworkClientFactory) {
      */
     suspend fun acquire(connection: NetworkConnection): ClientLease? {
         val key = keyOf(connection = connection)
-        val idle = mutex.withLock { takeIdle(key = key) }
+        val stale = mutableListOf<NetworkClient>()
+        val idle = mutex.withLock {
+            takeIdle(
+                key = key,
+                stale = stale,
+            )
+        }
+        stale.forEach { client -> runCatching { client.disconnect() } }
         if (idle != null) {
             return ClientLease(
                 key = key,
@@ -61,21 +72,24 @@ class NetworkClientPool(private val clientFactory: NetworkClientFactory) {
             return
         }
 
-        val surplus = mutex.withLock {
+        val stale = mutableListOf<NetworkClient>()
+        var surplus: NetworkClient? = null
+        mutex.withLock {
             val now = now()
-            pruneExpired(now = now)
+            stale += pruneExpired(now = now)
             val clients = idleClients.getOrPut(lease.key) { mutableListOf() }
             if (clients.size >= MAX_IDLE_CLIENTS) {
-                lease.client
+                surplus = lease.client
             } else {
                 clients += IdleClient(
                     client = lease.client,
                     idleSince = now,
                 )
-                null
             }
         }
-        if (surplus != null) runCatching { surplus.disconnect() }
+
+        stale.forEach { client -> runCatching { client.disconnect() } }
+        surplus?.let { client -> runCatching { client.disconnect() } }
     }
 
     /** Disconnects every client that is currently idle; the next [acquire] has to connect again. */
@@ -88,19 +102,20 @@ class NetworkClientPool(private val clientFactory: NetworkClientFactory) {
         clients.forEach { client -> runCatching { client.disconnect() } }
     }
 
-    private suspend fun takeIdle(key: String): NetworkClient? {
-        pruneExpired(now = now())
+    private fun takeIdle(key: String, stale: MutableList<NetworkClient>): NetworkClient? {
+        stale += pruneExpired(now = now())
         val clients = idleClients[key] ?: return null
         while (clients.isNotEmpty()) {
             val idle = clients.removeAt(index = clients.lastIndex)
             if (idle.client.isConnected()) return idle.client
-            runCatching { idle.client.disconnect() }
+            stale += idle.client
         }
         idleClients.remove(key)
         return null
     }
 
-    private suspend fun pruneExpired(now: Long) {
+    private fun pruneExpired(now: Long): List<NetworkClient> {
+        val stale = mutableListOf<NetworkClient>()
         idleClients.keys.toList().forEach { key ->
             val clients = idleClients[key] ?: return@forEach
             val expired = clients.filter { idle ->
@@ -108,10 +123,13 @@ class NetworkClientPool(private val clientFactory: NetworkClientFactory) {
             }
             if (expired.isEmpty()) return@forEach
 
-            expired.forEach { idle -> clients.remove(idle) }
+            expired.forEach { idle ->
+                clients.remove(idle)
+                stale += idle.client
+            }
             if (clients.isEmpty()) idleClients.remove(key)
-            expired.forEach { idle -> runCatching { idle.client.disconnect() } }
         }
+        return stale
     }
 
     private fun keyOf(connection: NetworkConnection): String = buildString {

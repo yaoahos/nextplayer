@@ -2,7 +2,6 @@ package dev.anilbeesetti.nextplayer.core.media.network
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.media.MediaDataSource
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
@@ -16,18 +15,16 @@ import coil3.fetch.Fetcher
 import coil3.fetch.ImageFetchResult
 import coil3.request.Options
 import coil3.toAndroidUri
-import java.io.Closeable
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
-import java.io.InputStream
 import java.io.RandomAccessFile
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
@@ -39,8 +36,8 @@ import org.koin.core.annotation.Single
  *
  * The frame is decoded with [MediaMetadataRetriever] from a local copy of the file, which is what
  * the app already does for videos on the device: the retriever works on files, and feeding it a
- * remote stream through [MediaDataSource] is unreliable for containers that keep their index at the
- * end of the file. Only the first [HEADER_BYTES] of the video are copied first, and the last
+ * remote stream is unreliable for containers that keep their index at the end of the file. Only the
+ * first [HEADER_BYTES] of the video are copied first, and the last
  * [TAIL_BYTES] only when that is not enough, so a cover costs a bounded amount of data instead of
  * the whole video.
  *
@@ -71,10 +68,14 @@ class NetworkVideoThumbnailFetcher(
         Fetcher {
 
         override suspend fun fetch(): FetchResult {
+            if (isRecentlyFailed()) throw IOException("Retrying $uri later")
             val frame = readCachedFrame()
                 ?: withTimeoutOrNull(timeMillis = FETCH_TIMEOUT_MS) { extractFrame() }
                     ?.also { bitmap -> writeCachedFrame(bitmap = bitmap) }
-                ?: throw IOException("Failed to read a thumbnail from $uri")
+            if (frame == null) {
+                rememberFailure()
+                throw IOException("Failed to read a thumbnail from $uri")
+            }
 
             return ImageFetchResult(
                 image = frame.toDrawable(options.context.resources).asImage(),
@@ -98,10 +99,6 @@ class NetworkVideoThumbnailFetcher(
                     val size = client.fileSize(path = target.filePath)
                     if (size <= 0L) return@withPermit null
                     decodeSparseCopy(
-                        client = client,
-                        path = target.filePath,
-                        size = size,
-                    ) ?: decodeOverDataSource(
                         client = client,
                         path = target.filePath,
                         size = size,
@@ -243,50 +240,26 @@ class NetworkVideoThumbnailFetcher(
             }
         }
 
-        private fun decodeOverDataSource(
-            client: NetworkClient,
-            path: String,
-            size: Long,
-        ): Bitmap? {
-            val retriever = MediaMetadataRetriever()
-            val source = NetworkMediaDataSource(
-                client = client,
-                path = path,
-                size = size,
-            )
-            return try {
-                retriever.setDataSource(source)
-                retriever.pickCover(hasTail = true)
-            } catch (_: RuntimeException) {
-                null
-            } finally {
-                retriever.closeSafely()
-                source.close()
-            }
-        }
-
         /**
-         * Decodes a handful of frames and returns the first one that holds actual picture content,
-         * or the brightest one when every candidate is dark: covers taken at a fixed second are
-         * often a black fade or a title card.
+         * Decodes a few frames and returns the first one that holds actual picture content, or the
+         * brightest one when every candidate is dark: covers taken at one fixed second are often a
+         * black fade or a title card.
+         *
+         * The candidate list stays short on purpose. Every decoded frame costs a seek in the
+         * retriever, and a folder is full of videos, so a cover that needs five attempts is worse
+         * than a cover that is a second later than ideal.
          */
         private fun MediaMetadataRetriever.pickCover(hasTail: Boolean): Bitmap? {
             val durationUs = extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
                 ?.toLongOrNull()
                 ?.let { seconds -> seconds * 1_000L }
             val candidates = buildList {
-                addAll(
-                    listOf(
-                        3_000_000L,
-                        6_000_000L,
-                        1_000_000L,
-                        10_000_000L,
-                    ),
-                )
                 if (hasTail && durationUs != null && durationUs > TAIL_MARGIN_US) {
+                    // The tail holds the end of the video, where titles are usually over.
                     add(durationUs - 3_000_000L)
-                    add(durationUs - 8_000_000L)
                 }
+                add(3_000_000L)
+                add(1_000_000L)
             }
 
             var best: Pair<Bitmap, Float>? = null
@@ -332,6 +305,19 @@ class NetworkVideoThumbnailFetcher(
                 scaledHeight,
                 true,
             )
+        }
+
+        private fun isRecentlyFailed(): Boolean {
+            val key = uri.toString()
+            val failedAt = failedCovers[key] ?: return false
+            if (System.currentTimeMillis() - failedAt < NEGATIVE_CACHE_MS) return true
+            failedCovers.remove(key)
+            return false
+        }
+
+        private fun rememberFailure() {
+            if (failedCovers.size >= NEGATIVE_CACHE_LIMIT) failedCovers.clear()
+            failedCovers[uri.toString()] = System.currentTimeMillis()
         }
 
         private fun readCachedFrame(): Bitmap? {
@@ -404,68 +390,19 @@ class NetworkVideoThumbnailFetcher(
         /** Old covers were black; a new directory makes sure they are not reused. */
         const val CACHE_DIRECTORY = "network_thumbnails_v2"
 
+        /** A cover that just failed is not retried on every scroll past it. */
+        const val NEGATIVE_CACHE_MS = 120_000L
+
+        const val NEGATIVE_CACHE_LIMIT = 500
+
+        val failedCovers = ConcurrentHashMap<String, Long>()
+
         const val CACHE_QUALITY = 85
 
         const val CACHE_LIMIT = 200
 
         /** Reading several covers at once would starve the connection they share. */
         val thumbnailSlots = Semaphore(permits = 4)
-    }
-}
-
-/**
- * Exposes a range of a file on a network connection as a [MediaDataSource], for videos whose index
- * is too large to be covered by the sparse copy above.
- */
-internal class NetworkMediaDataSource(
-    private val client: NetworkClient,
-    private val path: String,
-    private val size: Long,
-) : MediaDataSource(),
-    Closeable {
-
-    private var stream: InputStream? = null
-
-    private var streamPosition: Long = 0L
-
-    @Synchronized
-    override fun readAt(position: Long, buffer: ByteArray, offset: Int, size: Int): Int {
-        if (position >= this.size) return -1
-        val source = streamAt(position = position)
-        val read = source.read(
-            buffer,
-            offset,
-            size,
-        )
-        if (read < 0) {
-            close()
-        } else {
-            streamPosition += read
-        }
-        return read
-    }
-
-    override fun getSize(): Long = size
-
-    @Synchronized
-    override fun close() {
-        stream?.let { source -> runCatching { source.close() } }
-        stream = null
-    }
-
-    private fun streamAt(position: Long): InputStream {
-        val current = stream
-        if (current != null && streamPosition == position) return current
-        close()
-        val opened = runBlocking {
-            client.openStream(
-                path = path,
-                offset = position,
-            )
-        }
-        stream = opened
-        streamPosition = position
-        return opened
     }
 }
 
