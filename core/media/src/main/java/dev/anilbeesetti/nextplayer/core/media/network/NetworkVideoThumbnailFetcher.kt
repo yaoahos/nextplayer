@@ -36,10 +36,9 @@ import org.koin.core.annotation.Single
  *
  * The frame is decoded with [MediaMetadataRetriever] from a local copy of the file, which is what
  * the app already does for videos on the device: the retriever works on files, and feeding it a
- * remote stream is unreliable for containers that keep their index at the end of the file. Only the
- * first [HEADER_BYTES] of the video are copied first, and the last
- * [TAIL_BYTES] only when that is not enough, so a cover costs a bounded amount of data instead of
- * the whole video.
+ * remote stream is unreliable for containers that keep their index at the end of the file. The
+ * copy grows through [HEAD_STAGES] and ends with [TAIL_BYTES] at the end of the file, so a cover
+ * costs a bounded amount of data instead of the whole video.
  *
  * The cover is not simply the frame at a fixed second: the first seconds of a video are often a
  * black fade or a dark title card, so several frames are decoded and the first one with actual
@@ -123,10 +122,15 @@ class NetworkVideoThumbnailFetcher(
         }
 
         /**
-         * Copies the head of the remote file into a sparse local file and decodes a frame from it.
+         * Copies the start of the remote file into a sparse local file and decodes a frame from it.
          * The file keeps its real length, so offsets stay valid and the middle of the file is never
-         * downloaded. The tail is only fetched when the head alone does not hold enough of the
-         * video to read a frame, which is the case for containers that keep their index at the end.
+         * downloaded.
+         *
+         * The head grows in stages instead of being copied in one fixed size: a file with a low
+         * bitrate yields a frame from the first few megabytes, while a high bitrate file only holds
+         * a keyframe once more of its opening seconds were read. The tail is fetched once the first
+         * stage did not produce a frame, because containers such as MKV and non-faststart MP4 keep
+         * their index at the end and cannot be opened without it.
          */
         private suspend fun decodeSparseCopy(
             client: NetworkClient,
@@ -145,46 +149,52 @@ class NetworkVideoThumbnailFetcher(
                     "rw",
                 ).use { output ->
                     output.setLength(size)
-                    copyRange(
-                        client = client,
-                        path = path,
-                        output = output,
-                        offset = 0L,
-                        length = minOf(
+                    var copied = 0L
+                    var hasTail = false
+                    for (stage in HEAD_STAGES) {
+                        val target = minOf(
                             size,
-                            HEADER_BYTES,
-                        ),
-                    )
+                            stage,
+                        )
+                        if (target > copied) {
+                            copyRange(
+                                client = client,
+                                path = path,
+                                output = output,
+                                offset = copied,
+                                length = target - copied,
+                            )
+                            copied = target
+                        }
+
+                        decodeFile(
+                            path = file.path,
+                            hasTail = hasTail,
+                        )?.let { frame -> return frame }
+
+                        if (!hasTail) {
+                            val tailStart = maxOf(
+                                copied,
+                                size - TAIL_BYTES,
+                            )
+                            if (tailStart < size) {
+                                copyRange(
+                                    client = client,
+                                    path = path,
+                                    output = output,
+                                    offset = tailStart,
+                                    length = size - tailStart,
+                                )
+                                hasTail = true
+                                decodeFile(
+                                    path = file.path,
+                                    hasTail = true,
+                                )?.let { frame -> return frame }
+                            }
+                        }
+                    }
+                    null
                 }
-
-                decodeFile(
-                    path = file.path,
-                    hasTail = false,
-                )?.let { frame -> return frame }
-
-                if (size <= HEADER_BYTES) return null
-
-                RandomAccessFile(
-                    file,
-                    "rw",
-                ).use { output ->
-                    val tailStart = maxOf(
-                        HEADER_BYTES,
-                        size - TAIL_BYTES,
-                    )
-                    copyRange(
-                        client = client,
-                        path = path,
-                        output = output,
-                        offset = tailStart,
-                        length = size - tailStart,
-                    )
-                }
-
-                decodeFile(
-                    path = file.path,
-                    hasTail = true,
-                )
             } catch (_: Exception) {
                 null
             } finally {
@@ -260,6 +270,7 @@ class NetworkVideoThumbnailFetcher(
                 }
                 add(3_000_000L)
                 add(1_000_000L)
+                add(5_000_000L)
             }
 
             var best: Pair<Bitmap, Float>? = null
@@ -373,14 +384,22 @@ class NetworkVideoThumbnailFetcher(
         /** Length of the longest side of the decoded cover. */
         const val MAX_FRAME_DIMENSION = 512
 
-        /** Number of bytes copied from the start of the video. */
-        const val HEADER_BYTES = 4L * 1024L * 1024L
+        /**
+         * How much of the start of a video is copied, stage by stage. A later stage is only reached
+         * when the frames of the earlier one could not be decoded.
+         */
+        val HEAD_STAGES = listOf(
+            4L * 1024L * 1024L,
+            8L * 1024L * 1024L,
+            16L * 1024L * 1024L,
+            32L * 1024L * 1024L,
+        )
 
         /** Number of bytes copied from the end of the video, only when the head is not enough. */
         const val TAIL_BYTES = 4L * 1024L * 1024L
 
-        /** Files larger than this are decoded through the data source instead. */
-        const val MAX_SPARSE_BYTES = 8L * 1024L * 1024L * 1024L
+        /** The local copy is sparse, so even a large remux only costs the bytes that are read. */
+        const val MAX_SPARSE_BYTES = 64L * 1024L * 1024L * 1024L
 
         /** A video shorter than this has no meaningful "near the end" candidate. */
         const val TAIL_MARGIN_US = 10_000_000L

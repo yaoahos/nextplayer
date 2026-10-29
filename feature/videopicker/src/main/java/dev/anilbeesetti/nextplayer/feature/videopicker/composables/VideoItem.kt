@@ -46,6 +46,7 @@ import androidx.core.net.toUri
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.crossfade
+import dev.anilbeesetti.nextplayer.core.media.network.NetworkUri
 import dev.anilbeesetti.nextplayer.core.model.ApplicationPreferences
 import dev.anilbeesetti.nextplayer.core.model.MediaLayoutMode
 import dev.anilbeesetti.nextplayer.core.model.Video
@@ -278,6 +279,13 @@ private fun Video.isLocalUri(): Boolean {
         )
 }
 
+/**
+ * True when a cover can be shown. Videos on a network connection have no local file, but the image
+ * loader decodes their cover straight from the share, so they are not limited to the placeholder.
+ */
+private fun Video.hasCover(): Boolean =
+    isLocalUri() || NetworkUri.isNetworkUri(uri = uriString.toUri())
+
 @Composable
 private fun ThumbnailView(
     modifier: Modifier = Modifier,
@@ -285,7 +293,7 @@ private fun ThumbnailView(
     preferences: ApplicationPreferences,
 ) {
     val context = LocalContext.current
-    val isLocalVideo = remember(video.uriString) { video.isLocalUri() }
+    val hasCover = remember(video.uriString) { video.hasCover() }
     val isNew by produceState(
         initialValue = video.isNew(thresholdDays = preferences.newVideoThresholdDays),
         key1 = video.dateAdded,
@@ -311,7 +319,7 @@ private fun ThumbnailView(
                 .align(Alignment.Center)
                 .fillMaxSize(fraction = 0.5f),
         )
-        if (preferences.showThumbnailField && isLocalVideo) {
+        if (preferences.showThumbnailField && hasCover) {
             AsyncImage(
                 model = ImageRequest.Builder(context = context)
                     .data(video.uriString)
