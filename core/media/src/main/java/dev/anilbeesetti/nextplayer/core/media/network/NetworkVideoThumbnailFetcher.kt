@@ -4,7 +4,6 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
 import android.net.Uri
-import android.os.Build
 import android.util.Log
 import androidx.core.graphics.drawable.toDrawable
 import coil3.ImageLoader
@@ -16,17 +15,14 @@ import coil3.fetch.Fetcher
 import coil3.fetch.ImageFetchResult
 import coil3.request.Options
 import coil3.toAndroidUri
-import dev.anilbeesetti.nextplayer.core.model.NetworkConnection
+import dev.anilbeesetti.nextplayer.core.model.NetworkFile
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
-import java.io.RandomAccessFile
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
@@ -36,36 +32,29 @@ import org.koin.core.annotation.Single
 /**
  * Loads the cover frame of a video that lives on a network connection.
  *
- * The frame is decoded with [MediaMetadataRetriever] from a local copy of the file, which is what
- * the app already does for videos on the device: the retriever works on files, and feeding it a
- * remote stream is unreliable for containers that keep their index at the end of the file. The
- * copy grows through [HEAD_STAGES] and ends with [TAIL_BYTES] at the end of the file, so a cover
- * costs a bounded amount of data instead of the whole video.
+ * Two sources are used, in this order, and both avoid the pitfalls of reading the video by hand:
  *
- * The cover is not simply the frame at a fixed second: the first seconds of a video are often a
- * black fade or a dark title card, so several frames are decoded and the first one with actual
- * picture content wins. The result is cached on disk, and Coil keeps it in memory, so a folder can
- * be browsed repeatedly without touching the server again.
+ * 1. An image that sits next to the video (`<name>.jpg`, `poster.jpg`, `folder.jpg`, …), which is
+ *    what media centers such as Kodi and Nova look for first: if a library keeps its artwork in the
+ *    folder, that picture is the right cover and costs a single small read.
+ * 2. A frame decoded by [MediaMetadataRetriever] from [NetworkMediaServer]'s loopback URL. The
+ *    retriever can seek an http URL, so it reads only the parts of the file it needs to find a
+ *    keyframe, exactly like a player does, instead of downloading a fixed head and tail.
  */
 @Single
 class NetworkVideoThumbnailFetcher(
     private val connectionResolver: NetworkConnectionResolver,
     private val clientPool: NetworkClientPool,
+    private val mediaServer: NetworkMediaServer,
 ) : Fetcher.Factory<CoilUri> {
 
     override fun create(data: CoilUri, options: Options, imageLoader: ImageLoader): Fetcher? {
-        val uri = data.toAndroidUri()
-        return if (NetworkUri.isNetworkUri(uri = uri)) {
-            ThumbnailFetcher(
-                uri = uri,
-                options = options,
-            )
-        } else {
-            null
-        }
+        if (!NetworkUri.isNetworkUri(uri = data.toAndroidUri())) return null
+        return ThumbnailFetcher(
+            uri = data.toAndroidUri(),
+            options = options,
+        )
     }
-
-    private class SparseResult(val frame: Bitmap?, val bytesCopied: Long)
 
     private inner class ThumbnailFetcher(private val uri: Uri, private val options: Options) :
         Fetcher {
@@ -79,7 +68,6 @@ class NetworkVideoThumbnailFetcher(
                 rememberFailure()
                 throw IOException("Failed to read a thumbnail from $uri")
             }
-
             return ImageFetchResult(
                 image = frame.toDrawable(options.context.resources).asImage(),
                 isSampled = true,
@@ -87,293 +75,86 @@ class NetworkVideoThumbnailFetcher(
             )
         }
 
-        private suspend fun extractFrame(): Bitmap? = withContext(Dispatchers.IO) {
+        private suspend fun extractFrame(): Bitmap? = thumbnailSlots.withPermit {
             val target = NetworkUri.targetOf(
                 uri = uri,
                 connectionResolver = connectionResolver,
-            ) ?: return@withContext null
+            ) ?: return@withPermit null
 
-            thumbnailSlots.withPermit {
-                val first = attemptRead(
-                    connection = target.connection,
-                    path = target.filePath,
-                    fresh = false,
-                )
-                logAttempt(
-                    path = target.filePath,
-                    result = first,
-                )
-                if (first.frame != null) return@withPermit first.frame
-
-                // Bytes were read but nothing could be decoded: that is about the file, not the
-                // session, so a retry would only download the same range again.
-                if (first.bytesCopied > 0L) return@withPermit null
-
-                // Nothing could be read at all, which usually means the kept session died. One
-                // retry on a fresh connection keeps a dropped session from hiding a cover.
-                val retry = attemptRead(
-                    connection = target.connection,
-                    path = target.filePath,
-                    fresh = true,
-                )
-                logAttempt(
-                    path = target.filePath,
-                    result = retry,
-                )
-                retry.frame
+            val image = readSiblingImage(target = target)
+            if (image != null) {
+                log(message = "cover ${target.filePath}: image next to the video")
+                return@withPermit image
             }
-        }
 
-        private suspend fun attemptRead(
-            connection: NetworkConnection,
-            path: String,
-            fresh: Boolean,
-        ): SparseResult = clientPool.withClient(
-            connection = connection,
-            fresh = fresh,
-        ) { client ->
-            val size = client.fileSize(path = path)
-            if (size <= 0L) {
-                SparseResult(
-                    frame = null,
-                    bytesCopied = 0L,
-                )
-            } else {
-                decodeSparseCopy(
-                    client = client,
-                    path = path,
-                    size = size,
-                )
-            }
-        } ?: SparseResult(
-            frame = null,
-            bytesCopied = 0L,
-        )
-
-        private fun logAttempt(path: String, result: SparseResult) {
-            Log.d(
-                LOG_TAG,
-                "cover $path: ${result.bytesCopied} bytes read, frame=${result.frame != null}",
-            )
+            val frame = decodeWithRetriever(target = target)
+            log(message = "cover ${target.filePath}: frame=$frame")
+            frame
         }
 
         /**
-         * Copies the start of the remote file into a sparse local file and decodes a frame from it.
-         * The file keeps its real length, so offsets stay valid and the middle of the file is never
-         * downloaded.
-         *
-         * The head grows in stages instead of being copied in one fixed size: a file with a low
-         * bitrate yields a frame from the first few megabytes, while a high bitrate file only holds
-         * a keyframe once more of its opening seconds were read. The tail is fetched once the first
-         * stage did not produce a frame, because containers such as MKV and non-faststart MP4 keep
-         * their index at the end and cannot be opened without it.
+         * Reads an artwork file published next to the video. A library that keeps `poster.jpg` or
+         * `<name>.jpg` beside its videos gets its own artwork instead of a frame grabbed from the
+         * middle of a fade.
          */
-        private suspend fun decodeSparseCopy(
-            client: NetworkClient,
-            path: String,
-            size: Long,
-        ): SparseResult {
-            if (size > MAX_SPARSE_BYTES) {
-                return SparseResult(
-                    frame = null,
-                    bytesCopied = 0L,
-                )
-            }
-            val file = File.createTempFile(
-                "network-thumb-",
-                ".tmp",
-                options.context.cacheDir,
+        private suspend fun readSiblingImage(target: NetworkUri.Target): Bitmap? {
+            val directory = target.filePath.substringBeforeLast(
+                delimiter = '/',
+                missingDelimiterValue = "",
             )
-            var copied = 0L
-            return try {
-                RandomAccessFile(
-                    file,
-                    "rw",
-                ).use { output ->
-                    output.setLength(size)
-                    var hasTail = false
-                    for (stage in HEAD_STAGES) {
-                        val target = minOf(
-                            size,
-                            stage,
-                        )
-                        if (target > copied) {
-                            copyRange(
-                                client = client,
-                                path = path,
-                                output = output,
-                                offset = copied,
-                                length = target - copied,
-                            )
-                            copied = target
-                        }
+            val videoName = target.filePath.substringAfterLast('/')
+            val files = clientPool.withClient(connection = target.connection) { client ->
+                client.listFiles(path = directory).getOrNull()
+            } ?: return null
 
-                        decodeFile(
-                            path = file.path,
-                            hasTail = hasTail,
-                        )?.let { frame ->
-                            return SparseResult(
-                                frame = frame,
-                                bytesCopied = copied,
-                            )
-                        }
+            val candidate = files.firstOrNull { file -> file.isArtworkFor(videoName = videoName) }
+                ?: return null
+            val bytes = clientPool.withClient(connection = target.connection) { client ->
+                client.openStream(
+                    path = candidate.path,
+                    offset = 0L,
+                ).use { input -> input.readAtMost(limit = MAX_IMAGE_BYTES) }
+            } ?: return null
+            if (bytes.isEmpty()) return null
 
-                        if (!hasTail) {
-                            val tailStart = maxOf(
-                                copied,
-                                size - TAIL_BYTES,
-                            )
-                            if (tailStart < size) {
-                                copyRange(
-                                    client = client,
-                                    path = path,
-                                    output = output,
-                                    offset = tailStart,
-                                    length = size - tailStart,
-                                )
-                                copied += size - tailStart
-                                hasTail = true
-                                decodeFile(
-                                    path = file.path,
-                                    hasTail = true,
-                                )?.let { frame ->
-                                    return SparseResult(
-                                        frame = frame,
-                                        bytesCopied = copied,
-                                    )
-                                }
-                            }
-                        }
-                    }
-                    SparseResult(
-                        frame = null,
-                        bytesCopied = copied,
-                    )
-                }
-            } catch (_: Exception) {
-                SparseResult(
-                    frame = null,
-                    bytesCopied = copied,
-                )
-            } finally {
-                file.delete()
-            }
-        }
-
-        private suspend fun copyRange(
-            client: NetworkClient,
-            path: String,
-            output: RandomAccessFile,
-            offset: Long,
-            length: Long,
-        ) {
-            if (length <= 0L) return
-            val buffer = ByteArray(COPY_BUFFER_BYTES)
-            client.openStream(
-                path = path,
-                offset = offset,
-            ).use { input ->
-                output.seek(offset)
-                var remaining = length
-                while (remaining > 0L) {
-                    val requested = minOf(
-                        buffer.size.toLong(),
-                        remaining,
-                    ).toInt()
-                    val read = input.read(
-                        buffer,
-                        0,
-                        requested,
-                    )
-                    if (read <= 0) break
-                    output.write(
-                        buffer,
-                        0,
-                        read,
-                    )
-                    remaining -= read
-                }
-            }
-        }
-
-        private fun decodeFile(path: String, hasTail: Boolean): Bitmap? {
-            val retriever = MediaMetadataRetriever()
-            return try {
-                retriever.setDataSource(path)
-                retriever.pickCover(hasTail = hasTail)
-            } catch (_: RuntimeException) {
-                null
-            } finally {
-                retriever.closeSafely()
-            }
+            val bitmap = BitmapFactory.decodeByteArray(
+                bytes,
+                0,
+                bytes.size,
+            ) ?: return null
+            return bitmap.scaledToFit()
         }
 
         /**
-         * Decodes a few frames and returns the first one that holds actual picture content, or the
-         * brightest one when every candidate is dark: covers taken at one fixed second are often a
-         * black fade or a title card.
-         *
-         * The candidate list stays short on purpose. Every decoded frame costs a seek in the
-         * retriever, and a folder is full of videos, so a cover that needs five attempts is worse
-         * than a cover that is a second later than ideal.
+         * Decodes a frame through the loopback server: the retriever asks for byte ranges and the
+         * server reads exactly those from the connection, so seeking works like it does on a file.
          */
-        private fun MediaMetadataRetriever.pickCover(hasTail: Boolean): Bitmap? {
-            val durationUs = extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
-                ?.toLongOrNull()
-                ?.let { seconds -> seconds * 1_000L }
-            val candidates = buildList {
-                if (hasTail && durationUs != null && durationUs > TAIL_MARGIN_US) {
-                    // The tail holds the end of the video, where titles are usually over.
-                    add(durationUs - 3_000_000L)
-                }
-                add(3_000_000L)
-                add(1_000_000L)
-                add(5_000_000L)
-            }
+        private suspend fun decodeWithRetriever(target: NetworkUri.Target): Bitmap? {
+            val length = clientPool.withClient(connection = target.connection) { client ->
+                client.fileSize(path = target.filePath)
+            } ?: return null
+            if (length <= 0L) return null
 
-            var best: Pair<Bitmap, Float>? = null
-            for (timeUs in candidates) {
-                if (timeUs < 0L) continue
-                val frame = runCatching {
-                    getFrameAtTime(
-                        timeUs,
-                        MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
+            val url = mediaServer.open(
+                connection = target.connection,
+                path = target.filePath,
+                length = length,
+            )
+            return withContext(Dispatchers.IO) {
+                val retriever = MediaMetadataRetriever()
+                try {
+                    retriever.setDataSource(
+                        url,
+                        emptyMap(),
                     )
-                }
-                    .getOrNull() ?: continue
-                val quality = frame.pictureQuality()
-                if (quality.hasContent) {
-                    return frame.scaledToFit(maxDimension = MAX_FRAME_DIMENSION)
-                }
-                val current = best
-                if (current == null || quality.score > current.second) {
-                    best = frame to quality.score
+                    retriever.pickCover()
+                } catch (error: Exception) {
+                    log(message = "cover ${target.filePath}: retriever failed ($error)")
+                    null
+                } finally {
+                    retriever.closeSafely()
                 }
             }
-            return best?.first?.scaledToFit(maxDimension = MAX_FRAME_DIMENSION)
-        }
-
-        private fun MediaMetadataRetriever.closeSafely() {
-            runCatching {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) close() else release()
-            }
-        }
-
-        private fun Bitmap.scaledToFit(maxDimension: Int): Bitmap {
-            val largest = maxOf(
-                width,
-                height,
-            )
-            if (largest <= maxDimension) return this
-            val ratio = maxDimension.toFloat() / largest
-            val scaledWidth = (width * ratio).roundToInt().coerceAtLeast(1)
-            val scaledHeight = (height * ratio).roundToInt().coerceAtLeast(1)
-            return Bitmap.createScaledBitmap(
-                this,
-                scaledWidth,
-                scaledHeight,
-                true,
-            )
         }
 
         private fun isRecentlyFailed(): Boolean {
@@ -433,6 +214,13 @@ class NetworkVideoThumbnailFetcher(
                     .forEach { file -> file.delete() }
             }
         }
+
+        private fun log(message: String) {
+            Log.d(
+                LOG_TAG,
+                message,
+            )
+        }
     }
 
     private companion object {
@@ -442,30 +230,11 @@ class NetworkVideoThumbnailFetcher(
         /** Length of the longest side of the decoded cover. */
         const val MAX_FRAME_DIMENSION = 512
 
-        /**
-         * How much of the start of a video is copied, stage by stage. A later stage is only reached
-         * when the frames of the earlier one could not be decoded.
-         */
-        val HEAD_STAGES = listOf(
-            4L * 1024L * 1024L,
-            8L * 1024L * 1024L,
-            16L * 1024L * 1024L,
-            32L * 1024L * 1024L,
-        )
-
-        /** Number of bytes copied from the end of the video, only when the head is not enough. */
-        const val TAIL_BYTES = 4L * 1024L * 1024L
-
-        /** The local copy is sparse, so even a large remux only costs the bytes that are read. */
-        const val MAX_SPARSE_BYTES = 64L * 1024L * 1024L * 1024L
-
-        /** A video shorter than this has no meaningful "near the end" candidate. */
-        const val TAIL_MARGIN_US = 10_000_000L
-
-        const val COPY_BUFFER_BYTES = 256 * 1024
+        /** Artwork is small; anything larger is not a poster. */
+        const val MAX_IMAGE_BYTES = 8 * 1024 * 1024
 
         /** Old covers were black; a new directory makes sure they are not reused. */
-        const val CACHE_DIRECTORY = "network_thumbnails_v2"
+        const val CACHE_DIRECTORY = "network_thumbnails_v3"
 
         /** A cover that just failed is not retried on every scroll past it. */
         const val NEGATIVE_CACHE_MS = 120_000L
@@ -485,6 +254,134 @@ class NetworkVideoThumbnailFetcher(
         val thumbnailSlots = Semaphore(permits = 2)
     }
 }
+
+/**
+ * Picks the frame of a video that shows something: frames are taken in the middle of the video
+ * rather than at its very start, where a fade or a title card would give a black cover.
+ */
+private fun MediaMetadataRetriever.pickCover(): Bitmap? {
+    val durationMs = extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+        ?.toLongOrNull()
+    val durationUs = durationMs?.times(other = 1_000L)
+    val candidates = buildList {
+        if (durationUs != null && durationUs > TAIL_MARGIN_US) add(durationUs - 3_000_000L)
+        add(3_000_000L)
+        add(1_000_000L)
+        add(5_000_000L)
+        add(10_000_000L)
+    }.filter { time -> durationUs == null || time < durationUs }
+
+    var best: Bitmap? = null
+    var bestScore = -1f
+    for (time in candidates) {
+        val frame = runCatching {
+            getFrameAtTime(
+                time,
+                MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
+            )
+        }.getOrNull() ?: continue
+        val quality = frame.pictureQuality()
+        if (quality.hasContent) {
+            best?.recycle()
+            return frame.scaledToFit()
+        }
+        if (quality.score > bestScore) {
+            best?.recycle()
+            best = frame
+            bestScore = quality.score
+        } else {
+            frame.recycle()
+        }
+    }
+    return best?.scaledToFit()
+}
+
+/** A video shorter than this has no meaningful "near the end" candidate. */
+private const val TAIL_MARGIN_US = 10_000_000L
+
+internal fun NetworkFile.isArtworkFor(videoName: String): Boolean {
+    if (isDirectory) return false
+    val extension = name.substringAfterLast('.').lowercase()
+    if (extension !in artworkExtensions) return false
+    val base = name.substringBeforeLast('.')
+    return base == videoName.substringBeforeLast('.') ||
+        artworkNames.any { artwork -> base.lowercase() == artwork }
+}
+
+private val artworkExtensions = setOf(
+    "jpg",
+    "jpeg",
+    "png",
+    "webp",
+)
+
+private val artworkNames = listOf(
+    "poster",
+    "folder",
+    "cover",
+    "thumb",
+)
+
+private fun Bitmap.scaledToFit(): Bitmap {
+    val longest = maxOf(
+        width,
+        height,
+    )
+    if (longest <= MAX_FRAME_DIMENSION) return this
+    val ratio = MAX_FRAME_DIMENSION.toFloat() / longest
+    val scaled = Bitmap.createScaledBitmap(
+        this,
+        (width * ratio).roundToInt().coerceAtLeast(minimumValue = 1),
+        (height * ratio).roundToInt().coerceAtLeast(minimumValue = 1),
+        true,
+    )
+    if (scaled !== this) recycle()
+    return scaled
+}
+
+private fun MediaMetadataRetriever.closeSafely() {
+    runCatching { release() }
+}
+
+private fun java.io.InputStream.readAtMost(limit: Int): ByteArray {
+    val buffer = ByteArray(size = 16 * 1024)
+    val bytes = java.io.ByteArrayOutputStream()
+    var remaining = limit
+    while (remaining > 0) {
+        val read = read(
+            buffer,
+            0,
+            minOf(
+                remaining,
+                buffer.size,
+            ),
+        )
+        if (read <= 0) break
+        bytes.write(
+            buffer,
+            0,
+            read,
+        )
+        remaining -= read
+    }
+    return bytes.toByteArray()
+}
+
+/** Length of the longest side of the decoded cover. */
+private const val MAX_FRAME_DIMENSION = 512
+
+/** Resolution the frames are sampled at to rate how much picture they hold. */
+private const val SCORE_WIDTH = 32
+
+private const val SCORE_HEIGHT = 18
+
+/** A frame darker than this is treated as a black fade. */
+private const val MIN_BRIGHTNESS = 32f
+
+/** A frame flatter than this is treated as a blank card. */
+private const val MIN_DEVIATION = 10f
+
+private const val SCORE_DEVIATION_WEIGHT = 3f
 
 /**
  * Rates how much of a picture a frame holds: a black fade has a low mean brightness, and a flat
@@ -534,16 +431,3 @@ internal fun Bitmap.pictureQuality(): FrameQuality {
 }
 
 internal class FrameQuality(val score: Float, val hasContent: Boolean)
-
-/** Resolution the frames are sampled at to rate how much picture they hold. */
-private const val SCORE_WIDTH = 32
-
-private const val SCORE_HEIGHT = 18
-
-/** A frame darker than this is treated as a black fade. */
-private const val MIN_BRIGHTNESS = 32f
-
-/** A frame flatter than this is treated as a blank card. */
-private const val MIN_DEVIATION = 10f
-
-private const val SCORE_DEVIATION_WEIGHT = 3f
