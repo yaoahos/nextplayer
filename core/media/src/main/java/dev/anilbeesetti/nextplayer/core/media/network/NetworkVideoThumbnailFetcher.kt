@@ -5,6 +5,7 @@ import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
+import android.util.Log
 import androidx.core.graphics.drawable.toDrawable
 import coil3.ImageLoader
 import coil3.Uri as CoilUri
@@ -15,6 +16,7 @@ import coil3.fetch.Fetcher
 import coil3.fetch.ImageFetchResult
 import coil3.request.Options
 import coil3.toAndroidUri
+import dev.anilbeesetti.nextplayer.core.model.NetworkConnection
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
@@ -63,6 +65,8 @@ class NetworkVideoThumbnailFetcher(
         }
     }
 
+    private class SparseResult(val frame: Bitmap?, val bytesCopied: Long)
+
     private inner class ThumbnailFetcher(private val uri: Uri, private val options: Options) :
         Fetcher {
 
@@ -90,35 +94,67 @@ class NetworkVideoThumbnailFetcher(
             ) ?: return@withContext null
 
             thumbnailSlots.withPermit {
-                val lease = clientPool.acquire(connection = target.connection)
-                    ?: return@withPermit null
-                var reusable = true
-                try {
-                    val client = lease.client
-                    val size = client.fileSize(path = target.filePath)
-                    if (size <= 0L) return@withPermit null
-                    decodeSparseCopy(
-                        client = client,
-                        path = target.filePath,
-                        size = size,
-                    )
-                } catch (cancellation: CancellationException) {
-                    // The read is blocked in the client, so give the client up instead of lending it
-                    // out while the abandoned read may still be using it.
-                    reusable = false
-                    throw cancellation
-                } catch (_: Exception) {
-                    reusable = false
-                    null
-                } finally {
-                    withContext(NonCancellable) {
-                        clientPool.release(
-                            lease = lease,
-                            reusable = reusable,
-                        )
-                    }
-                }
+                val first = attemptRead(
+                    connection = target.connection,
+                    path = target.filePath,
+                    fresh = false,
+                )
+                logAttempt(
+                    path = target.filePath,
+                    result = first,
+                )
+                if (first.frame != null) return@withPermit first.frame
+
+                // Bytes were read but nothing could be decoded: that is about the file, not the
+                // session, so a retry would only download the same range again.
+                if (first.bytesCopied > 0L) return@withPermit null
+
+                // Nothing could be read at all, which usually means the kept session died. One
+                // retry on a fresh connection keeps a dropped session from hiding a cover.
+                val retry = attemptRead(
+                    connection = target.connection,
+                    path = target.filePath,
+                    fresh = true,
+                )
+                logAttempt(
+                    path = target.filePath,
+                    result = retry,
+                )
+                retry.frame
             }
+        }
+
+        private suspend fun attemptRead(
+            connection: NetworkConnection,
+            path: String,
+            fresh: Boolean,
+        ): SparseResult = clientPool.withClient(
+            connection = connection,
+            fresh = fresh,
+        ) { client ->
+            val size = client.fileSize(path = path)
+            if (size <= 0L) {
+                SparseResult(
+                    frame = null,
+                    bytesCopied = 0L,
+                )
+            } else {
+                decodeSparseCopy(
+                    client = client,
+                    path = path,
+                    size = size,
+                )
+            }
+        } ?: SparseResult(
+            frame = null,
+            bytesCopied = 0L,
+        )
+
+        private fun logAttempt(path: String, result: SparseResult) {
+            Log.d(
+                LOG_TAG,
+                "cover $path: ${result.bytesCopied} bytes read, frame=${result.frame != null}",
+            )
         }
 
         /**
@@ -136,20 +172,25 @@ class NetworkVideoThumbnailFetcher(
             client: NetworkClient,
             path: String,
             size: Long,
-        ): Bitmap? {
-            if (size > MAX_SPARSE_BYTES) return null
+        ): SparseResult {
+            if (size > MAX_SPARSE_BYTES) {
+                return SparseResult(
+                    frame = null,
+                    bytesCopied = 0L,
+                )
+            }
             val file = File.createTempFile(
                 "network-thumb-",
                 ".tmp",
                 options.context.cacheDir,
             )
+            var copied = 0L
             return try {
                 RandomAccessFile(
                     file,
                     "rw",
                 ).use { output ->
                     output.setLength(size)
-                    var copied = 0L
                     var hasTail = false
                     for (stage in HEAD_STAGES) {
                         val target = minOf(
@@ -170,7 +211,12 @@ class NetworkVideoThumbnailFetcher(
                         decodeFile(
                             path = file.path,
                             hasTail = hasTail,
-                        )?.let { frame -> return frame }
+                        )?.let { frame ->
+                            return SparseResult(
+                                frame = frame,
+                                bytesCopied = copied,
+                            )
+                        }
 
                         if (!hasTail) {
                             val tailStart = maxOf(
@@ -185,18 +231,30 @@ class NetworkVideoThumbnailFetcher(
                                     offset = tailStart,
                                     length = size - tailStart,
                                 )
+                                copied += size - tailStart
                                 hasTail = true
                                 decodeFile(
                                     path = file.path,
                                     hasTail = true,
-                                )?.let { frame -> return frame }
+                                )?.let { frame ->
+                                    return SparseResult(
+                                        frame = frame,
+                                        bytesCopied = copied,
+                                    )
+                                }
                             }
                         }
                     }
-                    null
+                    SparseResult(
+                        frame = null,
+                        bytesCopied = copied,
+                    )
                 }
             } catch (_: Exception) {
-                null
+                SparseResult(
+                    frame = null,
+                    bytesCopied = copied,
+                )
             } finally {
                 file.delete()
             }
@@ -416,12 +474,15 @@ class NetworkVideoThumbnailFetcher(
 
         val failedCovers = ConcurrentHashMap<String, Long>()
 
+        /** Logcat tag of the cover pipeline; useful when a server keeps refusing reads. */
+        const val LOG_TAG = "NetworkCover"
+
         const val CACHE_QUALITY = 85
 
         const val CACHE_LIMIT = 200
 
         /** Reading several covers at once would starve the connection they share. */
-        val thumbnailSlots = Semaphore(permits = 4)
+        val thumbnailSlots = Semaphore(permits = 2)
     }
 }
 

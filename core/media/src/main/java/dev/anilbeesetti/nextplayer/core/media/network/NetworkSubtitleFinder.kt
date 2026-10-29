@@ -4,9 +4,6 @@ import android.net.Uri
 import androidx.media3.common.util.UnstableApi
 import dev.anilbeesetti.nextplayer.core.model.NetworkConnection
 import dev.anilbeesetti.nextplayer.core.model.NetworkFile
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import org.koin.core.annotation.Single
 
@@ -137,25 +134,10 @@ class NetworkSubtitleFinder(
     private suspend fun fetchListing(
         connection: NetworkConnection,
         directory: String,
-    ): List<NetworkFile>? {
-        val lease = clientPool.acquire(connection = connection) ?: return null
-        var reusable = true
-        return try {
-            lease.client.listFiles(path = directory).getOrNull()
-        } catch (cancellation: CancellationException) {
-            reusable = false
-            throw cancellation
-        } catch (_: Exception) {
-            reusable = false
-            null
-        } finally {
-            withContext(NonCancellable) {
-                clientPool.release(
-                    lease = lease,
-                    reusable = reusable,
-                )
-            }
-        }
+    ): List<NetworkFile>? = clientPool.withClient(
+        connection = connection,
+    ) { client ->
+        client.listFiles(path = directory).getOrNull()
     }
 
     private fun joinPath(directory: String, name: String): String = when {

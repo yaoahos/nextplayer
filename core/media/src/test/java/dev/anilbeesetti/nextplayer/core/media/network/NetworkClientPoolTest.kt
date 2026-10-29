@@ -5,6 +5,10 @@ import dev.anilbeesetti.nextplayer.core.model.NetworkFile
 import dev.anilbeesetti.nextplayer.core.model.NetworkProtocol
 import java.io.ByteArrayInputStream
 import java.io.InputStream
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -106,7 +110,7 @@ class NetworkClientPoolTest {
     }
 
     @Test
-    fun `keeps at most two idle clients per connection`() = runTest {
+    fun `keeps only one idle client per connection`() = runTest {
         val factory = FakeClientFactory()
         val pool = NetworkClientPool(clientFactory = factory)
 
@@ -114,12 +118,88 @@ class NetworkClientPoolTest {
         leases.forEach { lease -> pool.release(lease = lease) }
 
         assertEquals(
-            1,
+            2,
             leases.count { lease -> lease.fake().disconnectCount > 0 },
         )
         assertEquals(
             3,
             factory.created.size,
+        )
+    }
+
+    @Test
+    fun `drops the kept client when a fresh one is requested`() = runTest {
+        val factory = FakeClientFactory()
+        val pool = NetworkClientPool(clientFactory = factory)
+
+        val first = pool.acquire(connection = connection)!!
+        pool.release(lease = first)
+        val fresh = pool.acquire(
+            connection = connection,
+            fresh = true,
+        )
+
+        assertNotSame(
+            first.client,
+            fresh?.client,
+        )
+        assertEquals(
+            1,
+            first.fake().disconnectCount,
+        )
+        assertEquals(
+            2,
+            factory.created.size,
+        )
+    }
+
+    @Test
+    fun `runs one caller at a time per connection`() = runTest {
+        val factory = FakeClientFactory()
+        val pool = NetworkClientPool(clientFactory = factory)
+        var active = 0
+        var peak = 0
+
+        coroutineScope {
+            List(size = 3) {
+                async {
+                    pool.withClient(connection = connection) { client ->
+                        active++
+                        peak = maxOf(
+                            peak,
+                            active,
+                        )
+                        delay(timeMillis = 10L)
+                        active--
+                        client
+                    }
+                }
+            }.awaitAll()
+        }
+
+        assertEquals(
+            1,
+            peak,
+        )
+        assertEquals(
+            1,
+            factory.created.size,
+        )
+    }
+
+    @Test
+    fun `drops the client when the work throws`() = runTest {
+        val factory = FakeClientFactory()
+        val pool = NetworkClientPool(clientFactory = factory)
+
+        val result = pool.withClient<String>(connection = connection) {
+            error(message = "boom")
+        }
+
+        assertNull(result)
+        assertEquals(
+            1,
+            factory.created.single().disconnectCount,
         )
     }
 
