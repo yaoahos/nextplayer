@@ -50,6 +50,10 @@ class NetworkVideoThumbnailFetcher(
 
     override fun create(data: CoilUri, options: Options, imageLoader: ImageLoader): Fetcher? {
         if (!NetworkUri.isNetworkUri(uri = data.toAndroidUri())) return null
+        Log.d(
+            LOG_TAG,
+            "create ",
+        )
         return ThumbnailFetcher(
             uri = data.toAndroidUri(),
             options = options,
@@ -60,11 +64,19 @@ class NetworkVideoThumbnailFetcher(
         Fetcher {
 
         override suspend fun fetch(): FetchResult {
+            Log.d(
+                LOG_TAG,
+                "fetch $uri",
+            )
             if (isRecentlyFailed()) throw IOException("Retrying $uri later")
             val frame = readCachedFrame()
                 ?: withTimeoutOrNull(timeMillis = FETCH_TIMEOUT_MS) { extractFrame() }
                     ?.also { bitmap -> writeCachedFrame(bitmap = bitmap) }
             if (frame == null) {
+                Log.d(
+                    LOG_TAG,
+                    "give up on $uri",
+                )
                 rememberFailure()
                 throw IOException("Failed to read a thumbnail from $uri")
             }
@@ -79,7 +91,14 @@ class NetworkVideoThumbnailFetcher(
             val target = NetworkUri.targetOf(
                 uri = uri,
                 connectionResolver = connectionResolver,
-            ) ?: return@withPermit null
+            )
+            if (target == null) {
+                Log.d(
+                    LOG_TAG,
+                    "no target for $uri",
+                )
+                return@withPermit null
+            }
 
             val image = readSiblingImage(target = target)
             if (image != null) {
@@ -105,7 +124,12 @@ class NetworkVideoThumbnailFetcher(
             val videoName = target.filePath.substringAfterLast('/')
             val files = clientPool.withClient(connection = target.connection) { client ->
                 client.listFiles(path = directory).getOrNull()
-            } ?: return null
+            }
+            Log.d(
+                LOG_TAG,
+                "listing $directory: ${files?.size} files",
+            )
+            if (files == null) return null
 
             val candidate = files.firstOrNull { file -> file.isArtworkFor(videoName = videoName) }
                 ?: return null
@@ -139,6 +163,10 @@ class NetworkVideoThumbnailFetcher(
                 connection = target.connection,
                 path = target.filePath,
                 length = length,
+            )
+            Log.d(
+                LOG_TAG,
+                "retriever $url ($length bytes)",
             )
             return withContext(Dispatchers.IO) {
                 val retriever = MediaMetadataRetriever()
@@ -225,7 +253,7 @@ class NetworkVideoThumbnailFetcher(
 
     private companion object {
         /** How long a cover lookup may run before it gives up. */
-        const val FETCH_TIMEOUT_MS = 15_000L
+        const val FETCH_TIMEOUT_MS = 30_000L
 
         /** Length of the longest side of the decoded cover. */
         const val MAX_FRAME_DIMENSION = 512

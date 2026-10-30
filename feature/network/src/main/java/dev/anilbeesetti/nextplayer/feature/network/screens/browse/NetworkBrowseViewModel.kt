@@ -1,6 +1,7 @@
 package dev.anilbeesetti.nextplayer.feature.network.screens.browse
 
 import android.net.Uri
+import android.util.Log
 import androidx.core.net.toUri
 import androidx.lifecycle.viewModelScope
 import dev.anilbeesetti.nextplayer.core.data.repository.MediaRepository
@@ -212,6 +213,10 @@ class NetworkBrowseViewModel(
                     val visible = files
                         .filter { it.isDirectory || isNetworkVideoFile(it.name) }
 
+                    Log.d(
+                        "NetworkCover",
+                        "browse $path: ${visible.count { file -> !file.isDirectory }} covers",
+                    )
                     stateInternal.update {
                         it.copy(
                             title = title(conn = conn),

@@ -1,5 +1,6 @@
 package dev.anilbeesetti.nextplayer.core.media.network
 
+import android.util.Log
 import dev.anilbeesetti.nextplayer.core.model.NetworkConnection
 import java.io.BufferedInputStream
 import java.io.InputStream
@@ -55,7 +56,11 @@ class NetworkMediaServer(private val clientPool: NetworkClientPool) {
             length = length,
             createdAt = System.currentTimeMillis(),
         )
-        return "http://127.0.0.1:${server.localPort}/media/$token"
+        Log.d(
+            LOG_TAG,
+            "serve $path ($length bytes) on port ${server.localPort}",
+        )
+        return "http://$LOOPBACK_HOST:${server.localPort}/media/$token"
     }
 
     private fun ensureStarted(): ServerSocket {
@@ -67,7 +72,7 @@ class NetworkMediaServer(private val clientPool: NetworkClientPool) {
             val socket = ServerSocket(
                 0,
                 BACKLOG,
-                InetAddress.getLoopbackAddress(),
+                InetAddress.getByName(LOOPBACK_HOST),
             )
             serverSocket = socket
             scope.launch { acceptRequests(server = socket) }
@@ -235,6 +240,10 @@ class NetworkMediaServer(private val clientPool: NetworkClientPool) {
                 missingDelimiterValue = "",
             )
             .substringBefore(delimiter = '/')
+        Log.d(
+            LOG_TAG,
+            "request $method $path range=$rangeStart-$rangeEnd",
+        )
         return Request(
             token = token,
             head = method == "HEAD",
@@ -299,6 +308,11 @@ class NetworkMediaServer(private val clientPool: NetworkClientPool) {
     )
 
     private companion object {
+        const val LOG_TAG = "NetworkCover"
+
+        /** The socket and the URL must use the same address, so pin the IPv4 loopback. */
+        const val LOOPBACK_HOST = "127.0.0.1"
+
         const val BACKLOG = 8
 
         /** A URL is only handed out for one cover lookup. */
